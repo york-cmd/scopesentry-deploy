@@ -2366,6 +2366,42 @@ run_scan_reload() {
   log "scan 已热加载（二进制已刷新）"
 }
 
+build_server_prod_binary() {
+  # 构建 server 生产二进制：pnpm build:pro + 同步 UI 到 cmd/main/static + Go 交叉编译 linux/amd64。
+  # 输出到 $SERVER_DIST_BINARY，dockerfile 直接 COPY 这个二进制。
+  rotate_log "$SERVER_LOG"
+
+  log "  - pnpm build:pro + 同步 UI 到 cmd/main/static（调用 dev-sync-ui-static.sh）"
+  start_heartbeat "前端打包 + UI 同步"
+  local sync_rc=0
+  bash "$SCRIPTS_DIR/dev-sync-ui-static.sh" >>"$SERVER_LOG" 2>&1 || sync_rc=$?
+  stop_heartbeat
+  (( sync_rc == 0 )) || {
+    tail_log_excerpt "server" "$SERVER_LOG"
+    fail "前端打包或同步失败，请查看 $SERVER_LOG"
+  }
+
+  log "  - Go 交叉编译 linux/amd64 (CGO_ENABLED=0) → $SERVER_DIST_BINARY"
+  mkdir -p "$SERVER_DIST_DIR"
+  local go_cache_dir go_mod_cache_dir
+  go_cache_dir="$CACHE_DIR/go-build/scope-sentry-prod"
+  go_mod_cache_dir="$CACHE_DIR/go-mod"
+  mkdir -p "$go_cache_dir" "$go_mod_cache_dir"
+  start_heartbeat "Go 交叉编译 linux/amd64"
+  local build_rc=0
+  (
+    cd "$SERVER_DIR"
+    GOOS=linux GOARCH=amd64 CGO_ENABLED=0 \
+    GOCACHE="$go_cache_dir" GOMODCACHE="$go_mod_cache_dir" \
+    "$GO_BIN" build -trimpath -ldflags="-s -w" -o "$SERVER_DIST_BINARY" ./cmd/main
+  ) >>"$SERVER_LOG" 2>&1 || build_rc=$?
+  stop_heartbeat
+  (( build_rc == 0 )) || {
+    tail_log_excerpt "server" "$SERVER_LOG"
+    fail "Go 交叉编译失败，请查看 $SERVER_LOG"
+  }
+}
+
 run_server_publish() {
   # 构建 + 推送 server 镜像到 GHCR。
   # 复用 build_server_prod_binary（pnpm build:pro + embed UI + 交叉编译）。
