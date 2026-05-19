@@ -1,0 +1,30 @@
+services:
+  scan:
+    image: ${SCAN_IMAGE}
+    container_name: ${CONTAINER_NAME}
+    restart: unless-stopped
+    environment:
+      SCOPESENTRY_SCAN_NETWORK_MODE: bridge
+      NodeName: ${NODE_NAME}
+      TimeZoneName: ${TIMEZONE_NAME}
+      MONGODB_IP: ${MONGODB_IP}
+      MONGODB_PORT: ${MONGODB_PORT}
+      MONGODB_DATABASE: ${MONGODB_DATABASE}
+      MONGODB_USER: ${MONGODB_USER}
+      MONGODB_PASSWORD: ${MONGODB_PASSWORD}
+      REDIS_IP: ${REDIS_IP}
+      REDIS_PORT: ${REDIS_PORT}
+      REDIS_PASSWORD: ${REDIS_PASSWORD}
+      INTERACTSH_URL: ${INTERACTSH_URL}
+      INTERACTSH_TOKEN: ${INTERACTSH_TOKEN}
+      NUCLEI_DEBUG: ${NUCLEI_DEBUG}
+      NUCLEI_STATS: ${NUCLEI_STATS}
+      NUCLEI_STATS_INTERVAL: ${NUCLEI_STATS_INTERVAL}
+      NUCLEI_DEBUG_REQUEST: ${NUCLEI_DEBUG_REQUEST}
+      NUCLEI_DEBUG_RESPONSE: ${NUCLEI_DEBUG_RESPONSE}
+      NUCLEI_TASK_ENGINE_TRACE: ${NUCLEI_TASK_ENGINE_TRACE}
+    volumes:
+      - ${RUNTIME_DIR}/config:/apps/config
+      - ${RUNTIME_DIR}/data:/apps/data
+      - ${RUNTIME_DIR}/plugin:/apps/plugin
+      - ${RUNTIME_DIR}/tmp:/apps/tmp

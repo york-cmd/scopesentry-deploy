@@ -1,0 +1,2647 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT_DIR="${DEVCTL_ROOT_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}"
+LOCAL_DEV_DIR="${LOCAL_DEV_DIR:-$ROOT_DIR/.local-dev}"
+
+ENV_DIR="$LOCAL_DEV_DIR/env"
+LOG_DIR="$LOCAL_DEV_DIR/logs"
+PID_DIR="$LOCAL_DEV_DIR/pids"
+CACHE_DIR="$LOCAL_DEV_DIR/cache"
+RUNTIME_DIR="$LOCAL_DEV_DIR/runtime"
+DATA_DIR="$LOCAL_DEV_DIR/data"
+STATE_DIR="$LOCAL_DEV_DIR/state"
+SERVER_RUNTIME_DIR="${SERVER_RUNTIME_DIR:-$RUNTIME_DIR/server}"
+SCAN_DOCKER_RUNTIME_DIR="${SCAN_DOCKER_RUNTIME_DIR:-$RUNTIME_DIR/scan-docker}"
+TMP_RUNTIME_DIR="$RUNTIME_DIR/tmp"
+
+SERVER_DIR="$ROOT_DIR/ScopeSentry"
+UI_DIR="$ROOT_DIR/ScopeSentry-UI"
+SCAN_DIR="$ROOT_DIR/ScopeSentry-Scan"
+SCRIPTS_DIR="$ROOT_DIR/scripts"
+
+SERVER_ENV_FILE="$SERVER_DIR/.env"
+DEVCTL_ENV_FILE="$ENV_DIR/devctl.env"
+SCAN_ENV_FILE="$LOCAL_DEV_DIR/dev-scan-docker.env"
+MANIFEST_FILE="$STATE_DIR/manifest.json"
+
+DB_COMPOSE_FILE="$SERVER_DIR/single-host-deployment.yml"
+DB_COMPOSE_OVERRIDE_FILE="$RUNTIME_DIR/db-docker-compose.override.yml"
+SCAN_COMPOSE_FILE="$SCRIPTS_DIR/dev-scan-docker-compose.yml"
+SCAN_COMPOSE_OVERRIDE_FILE="$SCAN_DOCKER_RUNTIME_DIR/docker-compose.host.override.yml"
+
+SERVER_LOG="$LOG_DIR/dev-server.log"
+UI_LOG="$LOG_DIR/dev-ui.log"
+SCAN_LOG="$LOG_DIR/dev-scan-docker.log"
+DB_LOG="$LOG_DIR/dev-db.log"
+
+SERVER_PID_FILE="$PID_DIR/dev-server.pid"
+UI_PID_FILE="$PID_DIR/dev-ui.pid"
+PASSWORD_FILE="$SERVER_RUNTIME_DIR/PASSWORD"
+SERVER_BINARY="$SERVER_RUNTIME_DIR/scope-sentry-dev"
+SERVER_EMBED_META_FILE="$STATE_DIR/server-embedded-ui.env"
+
+DEFAULT_API_URL="http://127.0.0.1:8082"
+DEFAULT_UI_URL="http://127.0.0.1:4000"
+DEFAULT_NODE_NAME="local-dev-node-docker"
+LEGACY_DEFAULT_SCAN_IMAGE="autumn27/scopesentry-scan:latest"
+DEFAULT_LOCAL_SCAN_IMAGE="scopesentry-scan-dev:local"
+DEFAULT_LOCAL_SCAN_BASE_IMAGE="scopesentry-scan-base:local"
+DEFAULT_SCAN_IMAGE="$DEFAULT_LOCAL_SCAN_IMAGE"
+DEFAULT_SCAN_CONTAINER_NAME="scopesentry-scan-dev"
+DEFAULT_TIMEZONE="Asia/Shanghai"
+DEFAULT_PROFILE_NAME="local-hybrid"
+
+SCAN_IMAGE_WAS_EXPLICIT=0
+if [[ -n "${SCAN_IMAGE+x}" ]]; then
+  SCAN_IMAGE_WAS_EXPLICIT=1
+fi
+
+API_URL="${API_URL:-$DEFAULT_API_URL}"
+UI_URL="${UI_URL:-$DEFAULT_UI_URL}"
+NODE_NAME="${NODE_NAME:-$DEFAULT_NODE_NAME}"
+SCAN_IMAGE="${SCAN_IMAGE:-$DEFAULT_SCAN_IMAGE}"
+LOCAL_SCAN_IMAGE="${LOCAL_SCAN_IMAGE:-$DEFAULT_LOCAL_SCAN_IMAGE}"
+LOCAL_SCAN_BASE_IMAGE="${LOCAL_SCAN_BASE_IMAGE:-$DEFAULT_LOCAL_SCAN_BASE_IMAGE}"
+SCAN_CONTAINER_NAME="${SCAN_CONTAINER_NAME:-$DEFAULT_SCAN_CONTAINER_NAME}"
+TIMEZONE="${TIMEZONE:-$DEFAULT_TIMEZONE}"
+PROFILE_NAME="${PROFILE_NAME:-$DEFAULT_PROFILE_NAME}"
+
+SCAN_DIST_DIR="$SCAN_DIR/dist/ScopeSentry-Scan_linux_amd64_v1"
+SCAN_DIST_BINARY="$SCAN_DIST_DIR/ScopeSentry-Scan"
+SCAN_BASE_DOCKERFILE="$SCAN_DIR/dockerfile.base"
+SCAN_APP_DOCKERFILE="$SCAN_DIR/dockerfile"
+
+SERVER_DIST_DIR="$SERVER_DIR/dist/ScopeSentry_linux_amd64_v1"
+SERVER_DIST_BINARY="$SERVER_DIST_DIR/ScopeSentry"
+SERVER_STATIC_DIR="$SERVER_DIR/cmd/main/static"
+UI_PROD_DIST_DIR="$UI_DIR/dist-pro"
+SERVER_DOCKERFILE="$SERVER_DIR/dockerfile"
+DB_PROD_COMPOSE_FILE="$SERVER_DIR/single-host-deployment.yml"
+
+DEPLOY_SERVER_IMAGE="scopesentry-server:local-prod"
+
+GHCR_REGISTRY="${GHCR_REGISTRY:-ghcr.io}"
+GHCR_BASE_REPO_NAME="${GHCR_BASE_REPO_NAME:-scopesentry-scan-base}"
+GHCR_SCAN_REPO_NAME="${GHCR_SCAN_REPO_NAME:-scopesentry-scan}"
+GHCR_SERVER_REPO_NAME="${GHCR_SERVER_REPO_NAME:-scopesentry-server}"
+GHCR_CONFIG_FILE="${GHCR_CONFIG_FILE:-$ENV_DIR/ghcr.env}"
+
+RSYNC_BIN="${RSYNC_BIN:-rsync}"
+
+DOCKER_BIN="${DOCKER_BIN:-docker}"
+GO_BIN="${GO_BIN:-go}"
+PNPM_BIN="${PNPM_BIN:-pnpm}"
+CURL_BIN="${CURL_BIN:-curl}"
+PYTHON_BIN="${PYTHON_BIN:-python3}"
+LSOF_BIN="${LSOF_BIN:-lsof}"
+UNAME_BIN="${UNAME_BIN:-uname}"
+PS_BIN="${PS_BIN:-ps}"
+PGREP_BIN="${PGREP_BIN:-pgrep}"
+
+MONGO_CONTAINER_NAME="scopesentry-mongodb"
+REDIS_CONTAINER_NAME="scopesentry-redis"
+STARTUP_FAILURE_HINT_OVERRIDE=""
+
+if [[ -f "$DEVCTL_ENV_FILE" ]]; then
+  set -a
+  # shellcheck disable=SC1090
+  source "$DEVCTL_ENV_FILE"
+  set +a
+fi
+
+if [[ "$SCAN_IMAGE_WAS_EXPLICIT" != "1" ]] && [[ "${SCAN_IMAGE:-}" == "$LEGACY_DEFAULT_SCAN_IMAGE" ]]; then
+  SCAN_IMAGE="$DEFAULT_LOCAL_SCAN_IMAGE"
+fi
+
+DEVCTL_PROGRESS_INTERVAL="${DEVCTL_PROGRESS_INTERVAL:-5}"
+if [[ ! "$DEVCTL_PROGRESS_INTERVAL" =~ ^[0-9]+$ ]] || (( DEVCTL_PROGRESS_INTERVAL < 1 )); then
+  DEVCTL_PROGRESS_INTERVAL=5
+fi
+
+DEVCTL_SCAN_BUILD_RETRIES="${DEVCTL_SCAN_BUILD_RETRIES:-3}"
+if [[ ! "$DEVCTL_SCAN_BUILD_RETRIES" =~ ^[0-9]+$ ]] || (( DEVCTL_SCAN_BUILD_RETRIES < 1 )); then
+  DEVCTL_SCAN_BUILD_RETRIES=3
+fi
+
+DEVCTL_SCAN_BUILD_RETRY_DELAY="${DEVCTL_SCAN_BUILD_RETRY_DELAY:-2}"
+if [[ ! "$DEVCTL_SCAN_BUILD_RETRY_DELAY" =~ ^[0-9]+$ ]] || (( DEVCTL_SCAN_BUILD_RETRY_DELAY < 0 )); then
+  DEVCTL_SCAN_BUILD_RETRY_DELAY=2
+fi
+
+usage() {
+  cat <<EOF
+用法: ./devctl <命令> [参数]
+
+生命周期:
+  install [--force]         初始化本地开发环境（生成 env / compose override / 清单）
+  doctor                    体检：依赖、端口、pid、容器状态
+  up                        启动全部服务（db → server → ui → scan）
+  down                      停止全部服务
+  restart                   先 down 再 up，停机/启动过程分阶段可见
+  update                    更新依赖（pnpm install）并重启全部服务
+  status                    显示各服务当前状态
+  logs server|ui|scan|db    实时跟随某一侧日志
+  reset-password <pw>       重置本地 Web 密码并同步 PASSWORD 文件，不影响项目数据
+
+Scan 迭代（按改动频率从高到低）:
+  scan reload               ★ 热加载：go build + docker restart，不走 docker build
+                              → 仅 Go 代码改动时用，耗时 ~3-5s
+  scan rebuild              重建 app 镜像（tools/linux/* 或 puredns-resolvers.txt 改动）
+                              → 耗时 ~10-20s，base 镜像缺失时会自动补构建
+  scan rebuild-base         强制重建 base 镜像（dockerfile.base / 系统依赖 / puredns / massdns）
+                              → 耗时 ~5-10min；会连带重建 app 层
+  scan publish-base [--tag vX.Y] [--no-latest]
+                              把本地 scopesentry-scan-base:local 推到 GHCR（远端节点用）
+                              凭据从 .local-dev/env/ghcr.env 读取
+                              默认 tag = 当前时间戳；默认同时推 :latest
+  scan publish [--tag vX.Y] [--no-latest]
+                              ★ 推送完整 scan 镜像到 GHCR（含 Go 二进制 + 工具）
+                              内部：build_scan_binary + docker build -f dockerfile.release + push
+                              节点端跑 docker compose pull && up -d 即拿到新版
+
+服务端发布（GHCR 镜像）:
+  server publish [--tag vX.Y] [--no-latest]
+                              本地 build server 镜像（含 embed UI），推到 GHCR
+                              凭据从 .local-dev/env/ghcr.env 读取（与 scan publish-base 共用）
+                              目标机器配合 scripts/install-server.sh 一键拉起
+
+清理:
+  clean                     清理临时文件（logs/pids/cache/tmp），保留 env
+  uninstall [--purge]       移除本地开发运行时；--purge 连 mongodb/redis 数据也删
+
+说明:
+  - Go 二进制在宿主机交叉编译，通过 docker compose volumes bind-mount 进容器。
+    改 Go 代码时首选 'scan reload'；镜像内的 tools/配置变了才用 'scan rebuild'。
+  - SCAN_IMAGE / LOCAL_SCAN_BASE_IMAGE 等环境变量可覆盖默认镜像 tag。
+  - SCAN_APT_MIRROR / SCAN_APT_SECURITY_MIRROR / SCAN_PIP_INDEX_URL 可覆盖 scan 镜像构建源。
+  - ONEFORALL_ARCHIVE_URL 可覆盖 OneForAll 源码 tar 包地址。
+  - DEVCTL_PROGRESS_INTERVAL（秒，默认 5）控制心跳/等待日志输出频率。
+EOF
+}
+
+log() {
+  printf '[devctl] %s\n' "$*"
+}
+
+# ---- 阶段计数 ----
+STAGE_TOTAL=0
+STAGE_CURRENT=0
+STAGE_TIMER=0
+
+stage_set_total() {
+  STAGE_TOTAL="$1"
+  STAGE_CURRENT=0
+}
+
+stage_begin() {
+  local stage_id="$1"
+  local label_cn="$2"
+  STAGE_CURRENT=$((STAGE_CURRENT + 1))
+  STAGE_TIMER="$(date +%s)"
+  log "[${STAGE_CURRENT}/${STAGE_TOTAL}] 阶段 ${stage_id}: ${label_cn}"
+}
+
+stage_end() {
+  local stage_id="$1"
+  local elapsed=$(( $(date +%s) - STAGE_TIMER ))
+  log "[${STAGE_CURRENT}/${STAGE_TOTAL}] 阶段 ${stage_id}: 就绪（用时 ${elapsed}s）"
+}
+
+# ---- 以下三个保留函数签名（内部使用），文案改为中文 ----
+log_stage_start() {
+  local stage="$1"
+  local message="$2"
+  log "阶段 ${stage}: ${message}"
+}
+
+log_stage_ready() {
+  local stage="$1"
+  local elapsed_seconds="$2"
+  log "阶段 ${stage}: 就绪（用时 ${elapsed_seconds}s）"
+}
+
+shell_quote() {
+  "$PYTHON_BIN" - "$1" <<'PY'
+import shlex
+import sys
+
+print(shlex.quote(sys.argv[1]), end="")
+PY
+}
+
+sha256_hex() {
+  "$PYTHON_BIN" - "$1" <<'PY'
+import hashlib
+import sys
+
+print(hashlib.sha256(sys.argv[1].encode("utf-8")).hexdigest(), end="")
+PY
+}
+
+log_waiting_status() {
+  local stage="$1"
+  local message="$2"
+  local elapsed_seconds="$3"
+  local timeout_seconds="$4"
+  log "等待 ${stage}: ${message}，已用时 ${elapsed_seconds}s（上限 ${timeout_seconds}s）"
+}
+
+progress_report_due() {
+  local elapsed_seconds="$1"
+  local last_report_seconds="$2"
+  if (( last_report_seconds < 0 )); then
+    return 0
+  fi
+  (( elapsed_seconds - last_report_seconds >= DEVCTL_PROGRESS_INTERVAL ))
+}
+
+# ---- 心跳：为长时间静默操作（docker compose、go build、pnpm install）提供进度反馈 ----
+HEARTBEAT_PID=""
+
+start_heartbeat() {
+  local label="$1"
+  local start_ts
+  start_ts="$(date +%s)"
+  (
+    while :; do
+      sleep "$DEVCTL_PROGRESS_INTERVAL"
+      printf '[devctl] 仍在%s，已用时 %ds\n' "$label" "$(( $(date +%s) - start_ts ))"
+    done
+  ) &
+  HEARTBEAT_PID=$!
+  disown "$HEARTBEAT_PID" 2>/dev/null || true
+}
+
+stop_heartbeat() {
+  [[ -n "${HEARTBEAT_PID:-}" ]] || return 0
+  kill "$HEARTBEAT_PID" 2>/dev/null || true
+  wait "$HEARTBEAT_PID" 2>/dev/null || true
+  HEARTBEAT_PID=""
+}
+
+# ---- 日志轮转：保留最近一次失败的上下文 ----
+rotate_log() {
+  local log_path="$1"
+  if [[ -f "$log_path" ]]; then
+    mv -f "$log_path" "${log_path}.1" 2>/dev/null || : >"$log_path"
+  fi
+}
+
+# ---- 等待文件出现（替代魔法 sleep）----
+wait_for_file() {
+  local path="$1"
+  local timeout_seconds="$2"
+  local stage="${3:-}"
+  local start_ts elapsed last_report_seconds=-1
+  start_ts="$(date +%s)"
+  while true; do
+    [[ -f "$path" ]] && return 0
+    elapsed=$(( $(date +%s) - start_ts ))
+    if (( elapsed >= timeout_seconds )); then
+      return 1
+    fi
+    if [[ -n "$stage" ]] && progress_report_due "$elapsed" "$last_report_seconds"; then
+      log_waiting_status "$stage" "文件 $path 尚未生成" "$elapsed" "$timeout_seconds"
+      last_report_seconds="$elapsed"
+    fi
+    sleep 1
+  done
+}
+
+fail() {
+  stop_heartbeat 2>/dev/null || true
+  printf '[devctl] 错误: %s\n' "$*" >&2
+  exit 1
+}
+
+# 退出前兜底清理心跳进程，避免 set -e 异常退出时留下后台循环
+trap 'stop_heartbeat 2>/dev/null || true' EXIT
+
+command_exists() {
+  command -v "$1" >/dev/null 2>&1
+}
+
+ensure_repo_layout() {
+  [[ -d "$SERVER_DIR" ]] || fail "缺失目录: $SERVER_DIR"
+  [[ -d "$UI_DIR" ]] || fail "缺失目录: $UI_DIR"
+  [[ -d "$SCAN_DIR" ]] || fail "缺失目录: $SCAN_DIR"
+  [[ -d "$SCRIPTS_DIR" ]] || fail "缺失目录: $SCRIPTS_DIR"
+  [[ -f "$DB_COMPOSE_FILE" ]] || fail "缺失文件: $DB_COMPOSE_FILE"
+  [[ -f "$SCAN_COMPOSE_FILE" ]] || fail "缺失文件: $SCAN_COMPOSE_FILE"
+}
+
+ensure_local_dirs() {
+  mkdir -p \
+    "$ENV_DIR" \
+    "$LOG_DIR" \
+    "$PID_DIR" \
+    "$CACHE_DIR" \
+    "$SERVER_RUNTIME_DIR" \
+    "$SCAN_DOCKER_RUNTIME_DIR" \
+    "$TMP_RUNTIME_DIR" \
+    "$DATA_DIR" \
+    "$STATE_DIR"
+}
+
+save_devctl_env() {
+  mkdir -p "$ENV_DIR"
+  cat >"$DEVCTL_ENV_FILE" <<EOF
+API_URL=$API_URL
+UI_URL=$UI_URL
+NODE_NAME=$NODE_NAME
+SCAN_IMAGE=$SCAN_IMAGE
+LOCAL_SCAN_IMAGE=$LOCAL_SCAN_IMAGE
+LOCAL_SCAN_BASE_IMAGE=$LOCAL_SCAN_BASE_IMAGE
+SCAN_CONTAINER_NAME=$SCAN_CONTAINER_NAME
+TIMEZONE=$TIMEZONE
+PROFILE_NAME=$PROFILE_NAME
+EOF
+}
+
+generate_compose_secret() {
+  "$PYTHON_BIN" - <<'PY'
+import secrets
+alphabet = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-"
+print("".join(secrets.choice(alphabet) for _ in range(32)), end="")
+PY
+}
+
+write_server_env() {
+  local force="${1:-0}"
+  mkdir -p "$SERVER_DIR"
+  if [[ -f "$SERVER_ENV_FILE" && "$force" != "1" ]]; then
+    return 0
+  fi
+
+  local mongo_password redis_password
+  mongo_password="$(generate_compose_secret)"
+  redis_password="$(generate_compose_secret)"
+
+  cat >"$SERVER_ENV_FILE" <<EOF
+TIMEZONE=$TIMEZONE
+MONGO_INITDB_ROOT_USERNAME=admin
+MONGO_INITDB_ROOT_PASSWORD=$mongo_password
+REDIS_PASSWORD=$redis_password
+EOF
+}
+
+require_cmd() {
+  local cmd="$1"
+  command_exists "$cmd" || fail "未找到必需命令: $cmd"
+}
+
+check_dependencies() {
+  require_cmd "$DOCKER_BIN"
+  require_cmd "$GO_BIN"
+  require_cmd "$PNPM_BIN"
+  require_cmd "$PYTHON_BIN"
+  require_cmd "$CURL_BIN"
+  "$DOCKER_BIN" compose version >/dev/null 2>&1 || fail "需要 docker compose（未可用）"
+}
+
+doctor_result() {
+  local level="$1"
+  local check_name="$2"
+  local summary="$3"
+  printf '%s %s: %s\n' "$level" "$check_name" "$summary"
+}
+
+doctor_pass() {
+  doctor_result "PASS" "$1" "$2"
+}
+
+doctor_warn() {
+  doctor_result "WARN" "$1" "$2"
+}
+
+doctor_fail() {
+  local check_name="$1"
+  local summary="$2"
+  DOCTOR_FAIL_COUNT=$((DOCTOR_FAIL_COUNT + 1))
+  doctor_result "FAIL" "$check_name" "$summary"
+}
+
+doctor_hint() {
+  printf '提示: %s\n' "$1"
+}
+
+doctor_check_command() {
+  local check_name="$1"
+  local cmd="$2"
+  local hint="${3:-}"
+  if command_exists "$cmd"; then
+    doctor_pass "$check_name" "已找到 ${cmd}：$(command -v "$cmd")"
+  else
+    doctor_fail "$check_name" "未找到 $cmd"
+    [[ -n "$hint" ]] && doctor_hint "$hint"
+  fi
+}
+
+doctor_check_repo_layout() {
+  local -a missing=()
+
+  [[ -d "$SERVER_DIR" ]] || missing+=("$SERVER_DIR")
+  [[ -d "$UI_DIR" ]] || missing+=("$UI_DIR")
+  [[ -d "$SCAN_DIR" ]] || missing+=("$SCAN_DIR")
+  [[ -d "$SCRIPTS_DIR" ]] || missing+=("$SCRIPTS_DIR")
+  [[ -f "$DB_COMPOSE_FILE" ]] || missing+=("$DB_COMPOSE_FILE")
+  [[ -f "$SCAN_COMPOSE_FILE" ]] || missing+=("$SCAN_COMPOSE_FILE")
+
+  if (( ${#missing[@]} == 0 )); then
+    doctor_pass "repo_layout" "必需的项目目录与 compose 文件齐全"
+  else
+    doctor_fail "repo_layout" "缺失路径：${missing[*]}"
+    doctor_hint "请在仓库根目录下运行，并补全缺失的项目目录"
+  fi
+}
+
+doctor_check_path() {
+  local check_name="$1"
+  local path="$2"
+  local path_type="$3"
+  local severity="${4:-fail}"
+  local hint="${5:-}"
+  local exists=1
+
+  case "$path_type" in
+    file)
+      [[ -f "$path" ]] || exists=0
+      ;;
+    dir)
+      [[ -d "$path" ]] || exists=0
+      ;;
+    *)
+      exists=0
+      ;;
+  esac
+
+  if [[ "$exists" == "1" ]]; then
+    doctor_pass "$check_name" "$path_type 存在：$path"
+    return 0
+  fi
+
+  if [[ "$severity" == "warn" ]]; then
+    doctor_warn "$check_name" "$path_type 缺失：$path"
+  else
+    doctor_fail "$check_name" "$path_type 缺失：$path"
+  fi
+  [[ -n "$hint" ]] && doctor_hint "$hint"
+}
+
+doctor_check_scan_network_mode() {
+  local compose_file="$ROOT_DIR/scripts/dev-scan-docker-compose.yml"
+
+  if [[ ! -f "$compose_file" ]]; then
+    doctor_warn "scan_network_mode" "未找到本地 scan compose：$compose_file"
+    doctor_hint "缺少 scripts/dev-scan-docker-compose.yml，无法判断 masscan 网络模式"
+    return 0
+  fi
+
+  if grep -Eq '^[[:space:]]*network_mode:[[:space:]]*host([[:space:]]|$)' "$compose_file"; then
+    doctor_pass "scan_network_mode" "本地 scan 容器使用 host 网络"
+    return 0
+  fi
+
+  doctor_warn "scan_network_mode" "本地 scan 容器未使用 host 网络，masscan 在 Docker Desktop/bridge 模式下可能漏扫"
+  doctor_hint "如需验证 masscan 结果，优先使用 Linux host 网络扫描节点；本地 dev 更适合验证插件集成与流程"
+}
+
+docker_daemon_reachable() {
+  docker_cmd ps --format '{{.Names}}' >/dev/null 2>&1
+}
+
+read_pid_file() {
+  local pid_file="$1"
+  if [[ -f "$pid_file" ]]; then
+    cat "$pid_file" 2>/dev/null || true
+  fi
+}
+
+pid_exists() {
+  local pid="$1"
+  [[ -n "$pid" ]] || return 1
+  kill -0 "$pid" >/dev/null 2>&1
+}
+
+pid_command() {
+  local pid="$1"
+  "$PS_BIN" -p "$pid" -o command= 2>/dev/null || true
+}
+
+pid_matches_expected() {
+  local pid="$1"
+  local expected="$2"
+  [[ -n "$pid" ]] || return 1
+  [[ -n "$expected" ]] || return 0
+  pid_exists "$pid" || return 1
+  pid_command "$pid" | grep -Fq "$expected"
+}
+
+url_host() {
+  "$PYTHON_BIN" - "$1" <<'PY'
+from urllib.parse import urlparse
+import sys
+parsed = urlparse(sys.argv[1])
+print(parsed.hostname or "127.0.0.1", end="")
+PY
+}
+
+url_port() {
+  "$PYTHON_BIN" - "$1" "$2" <<'PY'
+from urllib.parse import urlparse
+import sys
+parsed = urlparse(sys.argv[1])
+default_port = int(sys.argv[2])
+print(parsed.port or default_port, end="")
+PY
+}
+
+extract_entry_asset_from_file() {
+  local html_file="$1"
+  "$PYTHON_BIN" - "$html_file" <<'PY'
+import re
+import sys
+
+html = open(sys.argv[1], "r", encoding="utf-8").read()
+match = re.search(r'src=["\']([^"\']*/assets/[^"\']+\.js)["\']', html)
+if not match:
+    sys.exit(1)
+print(match.group(1), end="")
+PY
+}
+
+extract_entry_asset_from_html() {
+  local entry_asset=""
+  entry_asset="$(grep -Eo '/assets/[^"]+\.js' | head -n 1 || true)"
+  [[ -n "$entry_asset" ]] || return 1
+  printf '%s' "$entry_asset"
+}
+
+server_static_entry_asset() {
+  extract_entry_asset_from_file "$SERVER_STATIC_DIR/index.html"
+}
+
+server_static_fingerprint() {
+  "$PYTHON_BIN" - "$SERVER_STATIC_DIR" <<'PY'
+import hashlib
+import os
+import sys
+
+root = sys.argv[1]
+if not os.path.isdir(root):
+    sys.exit(1)
+
+digest = hashlib.sha256()
+for dirpath, dirnames, filenames in os.walk(root):
+    dirnames.sort()
+    filenames.sort()
+    for filename in filenames:
+        path = os.path.join(dirpath, filename)
+        rel = os.path.relpath(path, root).replace(os.sep, "/")
+        digest.update(rel.encode("utf-8"))
+        digest.update(b"\0")
+        with open(path, "rb") as handle:
+            while True:
+                chunk = handle.read(1024 * 1024)
+                if not chunk:
+                    break
+                digest.update(chunk)
+        digest.update(b"\0")
+print(digest.hexdigest(), end="")
+PY
+}
+
+load_server_embed_meta() {
+  SERVER_EMBED_STATIC_FINGERPRINT=""
+  SERVER_EMBED_ENTRY_ASSET=""
+  SERVER_EMBED_UPDATED_AT=""
+
+  if [[ -f "$SERVER_EMBED_META_FILE" ]]; then
+    # shellcheck disable=SC1090
+    source "$SERVER_EMBED_META_FILE"
+  fi
+}
+
+write_server_embed_meta() {
+  local fingerprint="$1"
+  local entry_asset="$2"
+  ensure_local_dirs
+  cat >"$SERVER_EMBED_META_FILE" <<EOF
+SERVER_EMBED_STATIC_FINGERPRINT=$fingerprint
+SERVER_EMBED_ENTRY_ASSET=$entry_asset
+SERVER_EMBED_UPDATED_AT=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
+EOF
+}
+
+record_current_server_embed_meta() {
+  local fingerprint entry_asset
+  fingerprint="$(server_static_fingerprint)" || return 1
+  entry_asset="$(server_static_entry_asset)" || return 1
+  write_server_embed_meta "$fingerprint" "$entry_asset"
+}
+
+server_rebuild_reason() {
+  local current_fingerprint current_entry_asset
+
+  [[ -f "$SERVER_BINARY" ]] || {
+    printf '缺失后端二进制'
+    return 0
+  }
+  [[ -d "$SERVER_STATIC_DIR" ]] || {
+    printf '缺失嵌入前端静态目录'
+    return 0
+  }
+  [[ -f "$SERVER_STATIC_DIR/index.html" ]] || {
+    printf '缺失嵌入前端 index.html'
+    return 0
+  }
+
+  current_fingerprint="$(server_static_fingerprint 2>/dev/null || true)"
+  current_entry_asset="$(server_static_entry_asset 2>/dev/null || true)"
+  if [[ -z "$current_fingerprint" || -z "$current_entry_asset" ]]; then
+    printf '无法读取嵌入前端静态资源指纹'
+    return 0
+  fi
+
+  [[ -f "$SERVER_EMBED_META_FILE" ]] || {
+    printf '缺少嵌入前端构建记录'
+    return 0
+  }
+
+  load_server_embed_meta
+  if [[ -z "$SERVER_EMBED_STATIC_FINGERPRINT" || -z "$SERVER_EMBED_ENTRY_ASSET" ]]; then
+    printf '嵌入前端构建记录不完整'
+    return 0
+  fi
+  if [[ "$current_fingerprint" != "$SERVER_EMBED_STATIC_FINGERPRINT" ]]; then
+    printf '检测到嵌入前端静态资源变更'
+    return 0
+  fi
+  if [[ "$current_entry_asset" != "$SERVER_EMBED_ENTRY_ASSET" ]]; then
+    printf '检测到嵌入前端入口资源变更'
+    return 0
+  fi
+
+  return 1
+}
+
+port_listening() {
+  local host="$1"
+  local port="$2"
+  local test_marker=""
+  if [[ -n "${DEVCTL_TEST_STATE_DIR:-}" ]]; then
+    test_marker="$DEVCTL_TEST_STATE_DIR/tcp-${host}-${port}.ready"
+    [[ -f "$test_marker" ]] && return 0
+  fi
+  "$PYTHON_BIN" - "$host" "$port" <<'PY'
+import socket
+import sys
+
+host = sys.argv[1]
+port = int(sys.argv[2])
+sock = socket.socket()
+sock.settimeout(1.0)
+try:
+    sock.connect((host, port))
+except OSError:
+    sys.exit(1)
+finally:
+    sock.close()
+PY
+}
+
+wait_for_tcp_port() {
+  local host="$1"
+  local port="$2"
+  local timeout_seconds="$3"
+  local stage="${4:-}"
+  local start_ts elapsed_seconds last_report_seconds=-1
+  start_ts="$(date +%s)"
+
+  while true; do
+    if port_listening "$host" "$port"; then
+      return 0
+    fi
+    elapsed_seconds=$(( $(date +%s) - start_ts ))
+    if (( elapsed_seconds >= timeout_seconds )); then
+      return 1
+    fi
+    if [[ -n "$stage" ]] && progress_report_due "$elapsed_seconds" "$last_report_seconds"; then
+      log_waiting_status "$stage" "tcp ${host}:${port} 尚未可达" "$elapsed_seconds" "$timeout_seconds"
+      last_report_seconds="$elapsed_seconds"
+    fi
+    sleep 1
+  done
+}
+
+http_ok() {
+  local url="$1"
+  "$CURL_BIN" -fsS --max-time 2 "$url" >/dev/null 2>&1
+}
+
+http_get_body() {
+  local url="$1"
+  "$CURL_BIN" -fsS --max-time 5 "$url"
+}
+
+verify_server_embedded_ui_consistent() {
+  local url="$1"
+  local root_url="${url%/}/"
+  local expected_entry actual_entry html
+
+  expected_entry="$(server_static_entry_asset 2>/dev/null || true)"
+  if [[ -z "$expected_entry" ]]; then
+    printf '无法解析磁盘静态资源入口'
+    return 1
+  fi
+
+  html="$(http_get_body "$root_url" 2>/dev/null || true)"
+  if [[ -z "$html" ]]; then
+    printf '无法读取 %s 返回的前端 HTML' "$root_url"
+    return 1
+  fi
+
+  actual_entry="$(printf '%s' "$html" | extract_entry_asset_from_html 2>/dev/null || true)"
+  if [[ -z "$actual_entry" ]]; then
+    printf '无法解析 %s 返回的前端入口资源' "$root_url"
+    return 1
+  fi
+  if [[ "$actual_entry" != "$expected_entry" ]]; then
+    printf '后端返回的嵌入前端入口与磁盘静态资源不一致: expected=%s actual=%s' "$expected_entry" "$actual_entry"
+    return 1
+  fi
+
+  return 0
+}
+
+wait_for_http() {
+  local url="$1"
+  local timeout_seconds="$2"
+  local stage="${3:-}"
+  local pid_file="${4:-}"
+  local expected_process="${5:-}"
+  local start_ts elapsed_seconds last_report_seconds=-1
+  local pid=""
+  start_ts="$(date +%s)"
+
+  while true; do
+    if http_ok "$url"; then
+      return 0
+    fi
+    if [[ -n "$pid_file" ]]; then
+      pid="$(read_pid_file "$pid_file")"
+      if [[ -n "$pid" ]] && ! pid_matches_expected "$pid" "$expected_process"; then
+        return 2
+      fi
+    fi
+    elapsed_seconds=$(( $(date +%s) - start_ts ))
+    if (( elapsed_seconds >= timeout_seconds )); then
+      return 1
+    fi
+    if [[ -n "$stage" ]] && progress_report_due "$elapsed_seconds" "$last_report_seconds"; then
+      log_waiting_status "$stage" "HTTP $url 尚未就绪" "$elapsed_seconds" "$timeout_seconds"
+      last_report_seconds="$elapsed_seconds"
+    fi
+    sleep 1
+  done
+}
+
+listener_pid() {
+  local port="$1"
+  local pid=""
+  if ! command_exists "$LSOF_BIN"; then
+    return 1
+  fi
+  if IFS= read -r pid < <("$LSOF_BIN" -tiTCP:"$port" -sTCP:LISTEN 2>/dev/null); then
+    [[ -n "$pid" ]] || return 1
+    printf '%s\n' "$pid"
+    return 0
+  fi
+  return 1
+}
+
+pid_summary() {
+  local pid="$1"
+  local command=""
+  command="$(pid_command "$pid")"
+  if [[ -n "$command" ]]; then
+    printf '%s (pid %s)\n' "$command" "$pid"
+  else
+    printf 'pid %s\n' "$pid"
+  fi
+}
+
+doctor_check_port() {
+  local check_name="$1"
+  local port="$2"
+  local expected_substring="${3:-}"
+  local hint="${4:-}"
+  local expected_container="${5:-}"
+  local pid=""
+
+  if ! command_exists "$LSOF_BIN"; then
+    doctor_warn "$check_name" "未安装 lsof，跳过端口 $port 的检查"
+    return 0
+  fi
+
+  pid="$(listener_pid "$port" 2>/dev/null || true)"
+  if [[ -z "$pid" ]]; then
+    doctor_pass "$check_name" "端口 $port 空闲"
+    return 0
+  fi
+
+  if [[ -n "$expected_substring" ]] && pid_matches_expected "$pid" "$expected_substring"; then
+    doctor_pass "$check_name" "端口 $port 由预期进程占用"
+    return 0
+  fi
+
+  if [[ -n "$expected_container" ]] && docker_container_publishes_port "$expected_container" "$port"; then
+    doctor_pass "$check_name" "端口 $port 由本项目容器 $expected_container 发布"
+    return 0
+  fi
+
+  doctor_warn "$check_name" "端口 $port 已被占用：$(pid_summary "$pid")"
+  [[ -n "$hint" ]] && doctor_hint "$hint"
+}
+
+find_pid_by_command() {
+  local expected="$1"
+  local pid=""
+  if ! command_exists "$PGREP_BIN"; then
+    return 1
+  fi
+  if IFS= read -r pid < <("$PGREP_BIN" -f "$expected" 2>/dev/null); then
+    [[ -n "$pid" ]] || return 1
+    printf '%s\n' "$pid"
+    return 0
+  fi
+  return 1
+}
+
+kill_pid_gracefully() {
+  local pid="$1"
+  local timeout_seconds="${2:-10}"
+  local start_ts
+
+  pid_exists "$pid" || return 0
+  kill "$pid" >/dev/null 2>&1 || true
+  start_ts="$(date +%s)"
+  while pid_exists "$pid"; do
+    if (( $(date +%s) - start_ts >= timeout_seconds )); then
+      kill -9 "$pid" >/dev/null 2>&1 || true
+      break
+    fi
+    sleep 1
+  done
+}
+
+stop_local_process_by_port_or_pid() {
+  local pid_file="$1"
+  local expected_substring="$2"
+  local port="${3:-}"
+  local use_pgrep_fallback="${4:-0}"
+  local pid=""
+  local listen_pid=""
+  local matched_pid=""
+
+  pid="$(read_pid_file "$pid_file")"
+  if pid_matches_expected "$pid" "$expected_substring"; then
+    kill_pid_gracefully "$pid"
+  fi
+
+  if [[ -n "$port" ]] && listen_pid="$(listener_pid "$port" 2>/dev/null || true)"; then
+    if pid_matches_expected "$listen_pid" "$expected_substring"; then
+      kill_pid_gracefully "$listen_pid"
+    fi
+  fi
+
+  # pgrep fallback 非常宽泛（例如 "pnpm" 会误杀其它项目的 pnpm dev），
+  # 默认关闭，仅对名称足够唯一的进程（例如 scope-sentry-dev 二进制）开启。
+  if [[ "$use_pgrep_fallback" == "1" ]]; then
+    if matched_pid="$(find_pid_by_command "$expected_substring" 2>/dev/null || true)"; then
+      if pid_matches_expected "$matched_pid" "$expected_substring"; then
+        kill_pid_gracefully "$matched_pid"
+      fi
+    fi
+  fi
+
+  rm -f "$pid_file"
+}
+
+docker_cmd() {
+  "$DOCKER_BIN" "$@"
+}
+
+docker_image_exists() {
+  local image="$1"
+  docker_cmd image inspect "$image" >/dev/null 2>&1
+}
+
+db_compose() {
+  write_db_compose_override
+  docker_cmd compose -f "$DB_COMPOSE_FILE" -f "$DB_COMPOSE_OVERRIDE_FILE" "$@"
+}
+
+scan_host_target() {
+  printf '%s\n' "host.docker.internal"
+}
+
+ensure_scan_compose_override() {
+  mkdir -p "$SCAN_DOCKER_RUNTIME_DIR" "$SCAN_DIST_DIR"
+  local is_linux=0
+  if [[ "$("$UNAME_BIN" -s 2>/dev/null || printf unknown)" == "Linux" ]]; then
+    is_linux=1
+  fi
+  {
+    printf 'services:\n'
+    printf '  scan:\n'
+    if (( is_linux )); then
+      printf '    extra_hosts:\n'
+      printf '      - "host.docker.internal:host-gateway"\n'
+    fi
+    # 将宿主机编译好的 Go 二进制 bind-mount 进容器。Go 代码迭代无需 docker build，
+    # 仅需 `./devctl scan reload`（go build + docker restart）。
+    printf '    volumes:\n'
+    printf '      - %s:/apps/ScopeSentry-Scan\n' "$SCAN_DIST_BINARY"
+  } >"$SCAN_COMPOSE_OVERRIDE_FILE"
+}
+
+load_server_env_values() {
+  [[ -f "$SERVER_ENV_FILE" ]] || fail "缺失文件: $SERVER_ENV_FILE"
+
+  local sourced_timezone mongo_user mongo_password redis_password
+  set +u
+  # shellcheck disable=SC1090
+  source "$SERVER_ENV_FILE"
+  sourced_timezone="${TIMEZONE:-$DEFAULT_TIMEZONE}"
+  mongo_user="${MONGODB_USER:-${MONGO_INITDB_ROOT_USERNAME:-admin}}"
+  mongo_password="${MONGODB_PASSWORD:-${MONGO_INITDB_ROOT_PASSWORD:-mongodb_password}}"
+  redis_password="${REDIS_PASSWORD:-redis_password}"
+  set -u
+
+  SERVER_TIMEZONE_VALUE="$sourced_timezone"
+  SERVER_MONGODB_IP_VALUE="${MONGODB_IP:-127.0.0.1}"
+  SERVER_MONGODB_PORT_VALUE="${MONGODB_PORT:-27017}"
+  SERVER_MONGODB_DATABASE_VALUE="${MONGODB_DATABASE:-ScopeSentry}"
+  SERVER_MONGODB_USER_VALUE="$mongo_user"
+  SERVER_MONGODB_PASSWORD_VALUE="$mongo_password"
+  SERVER_REDIS_IP_VALUE="${REDIS_IP:-127.0.0.1}"
+  SERVER_REDIS_PORT_VALUE="${REDIS_PORT:-6379}"
+  SERVER_REDIS_PASSWORD_VALUE="$redis_password"
+}
+
+write_db_compose_override() {
+  ensure_local_dirs
+  load_server_env_values
+
+  cat >"$DB_COMPOSE_OVERRIDE_FILE" <<EOF
+services:
+  redis:
+    command:
+      - redis-server
+      - --requirepass
+      - ${SERVER_REDIS_PASSWORD_VALUE}
+      - --save
+      - ""
+      - --appendonly
+      - "no"
+      - --shutdown-on-sigterm
+      - nosave
+    healthcheck:
+      disable: true
+EOF
+}
+
+write_scan_env() {
+  ensure_local_dirs
+  load_server_env_values
+  ensure_scan_compose_override
+
+  mkdir -p \
+    "$SCAN_DOCKER_RUNTIME_DIR/config" \
+    "$SCAN_DOCKER_RUNTIME_DIR/data" \
+    "$SCAN_DOCKER_RUNTIME_DIR/plugin" \
+    "$SCAN_DOCKER_RUNTIME_DIR/tmp"
+
+  cat >"$SCAN_ENV_FILE" <<EOF
+CONTAINER_NAME=$SCAN_CONTAINER_NAME
+SCAN_IMAGE=$SCAN_IMAGE
+NODE_NAME=$NODE_NAME
+TIMEZONE_NAME=$TIMEZONE
+MONGODB_IP=${SCAN_MONGODB_IP:-$(scan_host_target)}
+MONGODB_PORT=${SCAN_MONGODB_PORT:-$SERVER_MONGODB_PORT_VALUE}
+MONGODB_DATABASE=${SCAN_MONGODB_DATABASE:-$SERVER_MONGODB_DATABASE_VALUE}
+MONGODB_USER=${SCAN_MONGODB_USER:-$SERVER_MONGODB_USER_VALUE}
+MONGODB_PASSWORD=${SCAN_MONGODB_PASSWORD:-$SERVER_MONGODB_PASSWORD_VALUE}
+REDIS_IP=${SCAN_REDIS_IP:-$(scan_host_target)}
+REDIS_PORT=${SCAN_REDIS_PORT:-$SERVER_REDIS_PORT_VALUE}
+REDIS_PASSWORD=${SCAN_REDIS_PASSWORD:-$SERVER_REDIS_PASSWORD_VALUE}
+INTERACTSH_URL=${INTERACTSH_URL:-}
+INTERACTSH_TOKEN=${INTERACTSH_TOKEN:-}
+NUCLEI_DEBUG=${NUCLEI_DEBUG:-}
+NUCLEI_STATS=${NUCLEI_STATS:-}
+NUCLEI_STATS_INTERVAL=${NUCLEI_STATS_INTERVAL:-}
+NUCLEI_DEBUG_REQUEST=${NUCLEI_DEBUG_REQUEST:-}
+NUCLEI_DEBUG_RESPONSE=${NUCLEI_DEBUG_RESPONSE:-}
+NUCLEI_TASK_ENGINE_TRACE=${NUCLEI_TASK_ENGINE_TRACE:-}
+RUNTIME_DIR=$SCAN_DOCKER_RUNTIME_DIR
+EOF
+}
+
+scan_compose() {
+  write_scan_env
+  local -a cmd
+  cmd=(compose --env-file "$SCAN_ENV_FILE" -f "$SCAN_COMPOSE_FILE")
+  if [[ -f "$SCAN_COMPOSE_OVERRIDE_FILE" ]]; then
+    cmd+=(-f "$SCAN_COMPOSE_OVERRIDE_FILE")
+  fi
+  docker_cmd "${cmd[@]}" "$@"
+}
+
+docker_container_running() {
+  local container="$1"
+  local containers=""
+  containers="$(docker_cmd ps --format '{{.Names}}' 2>/dev/null || true)"
+  [[ -n "$containers" ]] || return 1
+  grep -Fxq "$container" <<<"$containers"
+}
+
+docker_container_publishes_port() {
+  local container="$1"
+  local port="$2"
+  local mapping=""
+  docker_container_running "$container" || return 1
+  mapping="$(docker_cmd port "$container" "$port" 2>/dev/null || true)"
+  [[ -n "$mapping" ]]
+}
+
+docker_container_state() {
+  local container="$1"
+  docker_cmd inspect --format '{{.State.Status}} {{.State.Dead}}' "$container" 2>/dev/null || true
+}
+
+docker_container_health() {
+  local container="$1"
+  docker_cmd inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' "$container" 2>/dev/null || true
+}
+
+remove_stale_db_container() {
+  local container="$1"
+  local state status dead
+  state="$(docker_container_state "$container")"
+  [[ -n "$state" ]] || return 0
+
+  status="${state%% *}"
+  dead="${state##* }"
+  if [[ "$status" == "dead" || "$status" == "removing" || "$dead" == "true" ]]; then
+    log "移除异常数据库容器: $container (status=$status dead=$dead)"
+    docker_cmd rm -f "$container" >>"$DB_LOG" 2>&1 || true
+  fi
+}
+
+db_status() {
+  local mongo=0 redis=0
+  docker_container_running "$MONGO_CONTAINER_NAME" && mongo=1 || true
+  docker_container_running "$REDIS_CONTAINER_NAME" && redis=1 || true
+  if [[ "$mongo" == "1" && "$redis" == "1" ]]; then
+    printf 'running'
+  elif [[ "$mongo" == "1" || "$redis" == "1" ]]; then
+    printf 'partial'
+  else
+    printf 'stopped'
+  fi
+}
+
+server_status() {
+  local pid
+  pid="$(read_pid_file "$SERVER_PID_FILE")"
+  if http_ok "$API_URL"; then
+    printf 'running'
+  elif pid_matches_expected "$pid" "scope-sentry-dev"; then
+    printf 'starting'
+  else
+    printf 'stopped'
+  fi
+}
+
+ui_status() {
+  local pid
+  pid="$(read_pid_file "$UI_PID_FILE")"
+  if http_ok "$UI_URL"; then
+    printf 'running'
+  elif pid_matches_expected "$pid" "pnpm"; then
+    printf 'starting'
+  else
+    printf 'stopped'
+  fi
+}
+
+scan_status() {
+  if docker_container_running "$SCAN_CONTAINER_NAME"; then
+    printf 'running'
+  else
+    printf 'stopped'
+  fi
+}
+
+password_status() {
+  if [[ -f "$PASSWORD_FILE" ]]; then
+    printf 'present'
+  else
+    printf 'pending'
+  fi
+}
+
+write_manifest() {
+  "$PYTHON_BIN" - "$MANIFEST_FILE" <<'PY'
+import json
+import os
+import sys
+
+manifest_path = sys.argv[1]
+payload = {
+    "profile": os.environ["PROFILE_NAME"],
+    "api_url": os.environ["API_URL"],
+    "ui_url": os.environ["UI_URL"],
+    "node_name": os.environ["NODE_NAME"],
+    "scan_image": os.environ["SCAN_IMAGE"],
+    "scan_container": os.environ["SCAN_CONTAINER_NAME"],
+    "password_file": os.environ["PASSWORD_FILE"],
+    "password_status": os.environ["PASSWORD_STATUS"],
+    "services": {
+        "db": {
+            "status": os.environ["DB_STATUS"],
+            "log_file": os.environ["DB_LOG"],
+        },
+        "server": {
+            "status": os.environ["SERVER_STATUS"],
+            "pid_file": os.environ["SERVER_PID_FILE"],
+            "log_file": os.environ["SERVER_LOG"],
+        },
+        "ui": {
+            "status": os.environ["UI_STATUS"],
+            "pid_file": os.environ["UI_PID_FILE"],
+            "log_file": os.environ["UI_LOG"],
+        },
+        "scan": {
+            "status": os.environ["SCAN_STATUS"],
+            "container": os.environ["SCAN_CONTAINER_NAME"],
+            "log_file": os.environ["SCAN_LOG"],
+            "runtime_dir": os.environ["SCAN_DOCKER_RUNTIME_DIR"],
+        },
+    },
+}
+with open(manifest_path, "w", encoding="utf-8") as f:
+    json.dump(payload, f, ensure_ascii=False, indent=2)
+PY
+}
+
+refresh_manifest() {
+  ensure_local_dirs
+  export PROFILE_NAME API_URL UI_URL NODE_NAME SCAN_IMAGE SCAN_CONTAINER_NAME
+  export PASSWORD_FILE DB_LOG SERVER_PID_FILE SERVER_LOG UI_PID_FILE UI_LOG SCAN_LOG SCAN_DOCKER_RUNTIME_DIR
+  export DB_STATUS="$(db_status)"
+  export SERVER_STATUS="$(server_status)"
+  export UI_STATUS="$(ui_status)"
+  export SCAN_STATUS="$(scan_status)"
+  export PASSWORD_STATUS="$(password_status)"
+  write_manifest
+}
+
+tail_log_excerpt() {
+  local title="$1"
+  local path="$2"
+  if [[ -f "$path" ]]; then
+    printf '[devctl] 最近日志 %s（%s）:\n' "$title" "$path" >&2
+    tail -n 40 "$path" >&2 || true
+  fi
+}
+
+extract_port_conflict_port() {
+  local log_path="$1"
+  local line=""
+  [[ -f "$log_path" ]] || return 1
+
+  while IFS= read -r line; do
+    if [[ "$line" =~ Bind\ for\ .*:([0-9]+)\ failed:\ port\ is\ already\ allocated ]]; then
+      printf '%s\n' "${BASH_REMATCH[1]}"
+      return 0
+    fi
+  done <"$log_path"
+
+  return 1
+}
+
+docker_published_port_owners() {
+  local port="$1"
+  docker_cmd ps -a --filter "publish=$port" --format '{{.Names}} {{.Ports}} {{.Status}}' 2>/dev/null || true
+}
+
+print_port_conflict_details() {
+  local port="$1"
+  local pid=""
+  local owners=""
+
+  STARTUP_FAILURE_HINT_OVERRIDE=""
+  printf '[devctl] 详情: 端口冲突: Docker 无法绑定主机端口 %s\n' "$port" >&2
+
+  pid="$(listener_pid "$port" 2>/dev/null || true)"
+  if [[ -n "$pid" ]]; then
+    printf '[devctl] 详情: 主机监听进程: %s\n' "$(pid_summary "$pid")" >&2
+    STARTUP_FAILURE_HINT_OVERRIDE="停止占用端口 $port 的进程后重新运行 ./devctl up"
+    return 0
+  fi
+
+  owners="$(docker_published_port_owners "$port")"
+  if [[ -n "$owners" ]]; then
+    printf '[devctl] 详情: 已有 Docker 容器占用端口 %s:\n' "$port" >&2
+    while IFS= read -r owner; do
+      [[ -n "$owner" ]] || continue
+      printf '[devctl] 详情:   %s\n' "$owner" >&2
+    done <<<"$owners"
+    STARTUP_FAILURE_HINT_OVERRIDE="停止或删除已占用端口 $port 的容器后重新运行 ./devctl up"
+    return 0
+  fi
+
+  printf '[devctl] 详情: 未在主机或发布的容器上找到占用端口 %s 的进程\n' "$port" >&2
+  printf '[devctl] 详情: 通常是 Docker 本身留下的陈旧端口预留\n' >&2
+  STARTUP_FAILURE_HINT_OVERRIDE="重启 Docker Desktop 清除端口 $port 的陈旧预留，然后重新运行 ./devctl up"
+}
+
+print_startup_failure_diagnostics() {
+  local stage="$1"
+  local log_path="$2"
+  local port=""
+
+  [[ "$stage" == "db" ]] || return 0
+  port="$(extract_port_conflict_port "$log_path" 2>/dev/null || true)"
+  [[ -n "$port" ]] || return 0
+
+  print_port_conflict_details "$port"
+}
+
+report_startup_failure() {
+  local stage="$1"
+  local reason="$2"
+  local log_title="$3"
+  local log_path="$4"
+  local hint="${5:-运行 ./devctl doctor}"
+
+  stop_heartbeat 2>/dev/null || true
+  STARTUP_FAILURE_HINT_OVERRIDE=""
+  printf '[devctl] 启动失败于阶段: %s\n' "$stage" >&2
+  printf '[devctl] 原因: %s\n' "$reason" >&2
+  print_startup_failure_diagnostics "$stage" "$log_path"
+  if [[ -n "$STARTUP_FAILURE_HINT_OVERRIDE" ]]; then
+    hint="$STARTUP_FAILURE_HINT_OVERRIDE"
+  fi
+  tail_log_excerpt "$log_title" "$log_path"
+  printf '提示: %s\n' "$hint" >&2
+  exit 1
+}
+
+doctor_check_pid_file() {
+  local check_name="$1"
+  local pid_file="$2"
+  local expected_substring="$3"
+  local pid=""
+
+  if [[ ! -f "$pid_file" ]]; then
+    doctor_pass "$check_name" "无 pid 文件"
+    return 0
+  fi
+
+  pid="$(read_pid_file "$pid_file")"
+  if pid_matches_expected "$pid" "$expected_substring"; then
+    doctor_pass "$check_name" "pid 文件指向一个存活的 $expected_substring 进程"
+    return 0
+  fi
+
+  if [[ -n "$pid" ]] && pid_exists "$pid"; then
+    doctor_warn "$check_name" "pid 文件指向了非预期的进程：$(pid_summary "$pid")"
+  else
+    doctor_warn "$check_name" "发现陈旧的 pid 文件：$pid_file"
+  fi
+  doctor_hint "若该进程已失效，请删除 $pid_file"
+}
+
+wait_for_mongo_ready() {
+  local timeout_seconds="$1"
+  local stage="${2:-}"
+  local start_ts health elapsed_seconds last_report_seconds=-1
+  start_ts="$(date +%s)"
+  while true; do
+    if docker_container_running "$MONGO_CONTAINER_NAME"; then
+      health="$(docker_container_health "$MONGO_CONTAINER_NAME")"
+      if [[ "$health" == "healthy" || "$health" == "running" ]]; then
+        return 0
+      fi
+    else
+      health="container=stopped"
+    fi
+    elapsed_seconds=$(( $(date +%s) - start_ts ))
+    if (( elapsed_seconds >= timeout_seconds )); then
+      return 1
+    fi
+    if [[ -n "$stage" ]] && progress_report_due "$elapsed_seconds" "$last_report_seconds"; then
+      log_waiting_status "$stage" "mongo 健康=${health:-unknown}" "$elapsed_seconds" "$timeout_seconds"
+      last_report_seconds="$elapsed_seconds"
+    fi
+    sleep 1
+  done
+}
+
+wait_for_scan_container() {
+  local timeout_seconds="$1"
+  local stage="${2:-}"
+  local start_ts elapsed_seconds last_report_seconds=-1
+  start_ts="$(date +%s)"
+  while true; do
+    if docker_container_running "$SCAN_CONTAINER_NAME"; then
+      return 0
+    fi
+    elapsed_seconds=$(( $(date +%s) - start_ts ))
+    if (( elapsed_seconds >= timeout_seconds )); then
+      return 1
+    fi
+    if [[ -n "$stage" ]] && progress_report_due "$elapsed_seconds" "$last_report_seconds"; then
+      log_waiting_status "$stage" "容器 $SCAN_CONTAINER_NAME 尚未运行" "$elapsed_seconds" "$timeout_seconds"
+      last_report_seconds="$elapsed_seconds"
+    fi
+    sleep 1
+  done
+}
+
+run_doctor() {
+  local api_port ui_port redis_port
+  local docker_compose_ok=0
+  local docker_daemon_ok=0
+  local db_state="unknown"
+  local server_state ui_state scan_state
+
+  DOCTOR_FAIL_COUNT=0
+  api_port="$(url_port "$API_URL" 8082)"
+  ui_port="$(url_port "$UI_URL" 4000)"
+  redis_port="${SCAN_REDIS_PORT:-6379}"
+
+  doctor_check_repo_layout
+  doctor_check_path "server_env" "$SERVER_ENV_FILE" "file" "fail" "运行 ./devctl install 以生成 ScopeSentry/.env"
+  doctor_check_path "local_dev_runtime" "$LOCAL_DEV_DIR" "dir" "warn" "运行 ./devctl install 以准备 .local-dev 目录"
+  doctor_check_scan_network_mode
+
+  doctor_check_command "docker_cli" "$DOCKER_BIN" "请安装 Docker Desktop 或兼容的 docker 引擎"
+  doctor_check_command "go_cli" "$GO_BIN" "请先安装 Go 后再构建本地后端"
+  doctor_check_command "pnpm_cli" "$PNPM_BIN" "请先安装 pnpm 后再启动 UI"
+  doctor_check_command "python3_cli" "$PYTHON_BIN" "请安装 Python 3 用于辅助脚本与清单生成"
+  doctor_check_command "curl_cli" "$CURL_BIN" "请安装 curl 用于就绪探测"
+
+  if command_exists "$DOCKER_BIN"; then
+    if docker_cmd compose version >/dev/null 2>&1; then
+      docker_compose_ok=1
+      doctor_pass "docker_compose" "docker compose 可用"
+    else
+      doctor_fail "docker_compose" "docker compose 不可用"
+      doctor_hint "请安装或启用 docker compose 后重新运行 ./devctl doctor"
+    fi
+
+    if docker_daemon_reachable; then
+      docker_daemon_ok=1
+      doctor_pass "docker_daemon" "docker 守护进程可达"
+    else
+      doctor_fail "docker_daemon" "docker 守护进程不可达"
+      doctor_hint "启动 Docker 后重新运行 ./devctl doctor"
+    fi
+  fi
+
+  doctor_check_port "api_port" "$api_port" "scope-sentry-dev" "请释放端口 ${api_port}，或在运行 ./devctl up 前覆盖 API_URL"
+  doctor_check_port "ui_port" "$ui_port" "vite" "请释放端口 ${ui_port}，或在运行 ./devctl up 前覆盖 UI_URL"
+  doctor_check_port "redis_port" "$redis_port" "" "如果 MongoDB 与 Redis 需要本地绑定，请释放端口 $redis_port" "$REDIS_CONTAINER_NAME"
+
+  doctor_check_pid_file "server_pid" "$SERVER_PID_FILE" "scope-sentry-dev"
+  doctor_check_pid_file "ui_pid" "$UI_PID_FILE" "pnpm"
+
+  if [[ "$docker_daemon_ok" == "1" && "$docker_compose_ok" == "1" ]]; then
+    db_state="$(db_status)"
+    scan_state="$(scan_status)"
+    doctor_pass "db_status" "当前状态：$db_state"
+    doctor_pass "scan_status" "当前状态：$scan_state"
+  else
+    doctor_warn "db_status" "因 docker 诊断失败，已跳过"
+    doctor_warn "scan_status" "因 docker 诊断失败，已跳过"
+  fi
+
+  server_state="$(server_status)"
+  ui_state="$(ui_status)"
+  doctor_pass "server_status" "当前状态：$server_state"
+  doctor_pass "ui_status" "当前状态：$ui_state"
+
+  if [[ -f "$PASSWORD_FILE" ]]; then
+    doctor_pass "password_file" "已就位：$PASSWORD_FILE"
+  else
+    doctor_warn "password_file" "尚未生成：$PASSWORD_FILE"
+    doctor_hint "如数据库已初始化但忘记密码，请运行 ./devctl reset-password <new-password>"
+  fi
+
+  if (( DOCTOR_FAIL_COUNT > 0 )); then
+    return 1
+  fi
+}
+
+run_install() {
+  local force="${1:-0}"
+  ensure_repo_layout
+  check_dependencies
+  ensure_local_dirs
+  save_devctl_env
+  write_server_env "$force"
+  write_db_compose_override
+  write_scan_env
+  refresh_manifest
+  log "本地环境已准备完成"
+  log "服务端 env 文件: $SERVER_ENV_FILE"
+  log "清单文件: $MANIFEST_FILE"
+  log "登录密码将在后端首次启动时由 ScopeSentry 自动生成"
+}
+
+start_db() {
+  ensure_local_dirs
+  rotate_log "$DB_LOG"
+  remove_stale_db_container "$MONGO_CONTAINER_NAME"
+  remove_stale_db_container "$REDIS_CONTAINER_NAME"
+  db_compose up -d mongodb redis >"$DB_LOG" 2>&1
+}
+
+build_server_binary() {
+  local force_clean_rebuild="${1:-0}"
+  local -a build_cmd
+  ensure_local_dirs
+  load_server_env_values
+
+  local go_cache_dir go_mod_cache_dir
+  go_cache_dir="$CACHE_DIR/go-build/scope-sentry"
+  go_mod_cache_dir="$CACHE_DIR/go-mod"
+
+  mkdir -p "$go_cache_dir" "$go_mod_cache_dir" "$SERVER_RUNTIME_DIR"
+  if (( force_clean_rebuild )); then
+    rm -rf "$go_cache_dir"
+    mkdir -p "$go_cache_dir"
+    rm -f "$SERVER_BINARY"
+  fi
+  build_cmd=("$GO_BIN" build -o "$SERVER_BINARY" ./cmd/main)
+  if (( force_clean_rebuild )); then
+    build_cmd=("$GO_BIN" build -a -o "$SERVER_BINARY" ./cmd/main)
+  fi
+  (
+    cd "$SERVER_DIR"
+    GOCACHE="$go_cache_dir" \
+    GOMODCACHE="$go_mod_cache_dir" \
+    "${build_cmd[@]}"
+  ) >>"$SERVER_LOG" 2>&1
+
+  record_current_server_embed_meta >>"$SERVER_LOG" 2>&1
+}
+
+start_server() {
+  local status
+  local server_pid
+  local rebuild_reason=""
+  local force_clean_rebuild=0
+  status="$(server_status)"
+  rebuild_reason="$(server_rebuild_reason 2>/dev/null || true)"
+
+  if [[ -n "$rebuild_reason" ]]; then
+    force_clean_rebuild=1
+    log "server: ${rebuild_reason}，强制净重编后端"
+    if [[ "$status" == "running" || "$status" == "starting" ]]; then
+      stop_local_process_by_port_or_pid "$SERVER_PID_FILE" "scope-sentry-dev" "$(url_port "$API_URL" 8082)" 1
+      status="stopped"
+    fi
+  elif [[ "$status" == "running" || "$status" == "starting" ]]; then
+    return 0
+  fi
+
+  rotate_log "$SERVER_LOG"
+  start_heartbeat "编译后端二进制"
+  local build_rc=0
+  build_server_binary "$force_clean_rebuild" || build_rc=$?
+  stop_heartbeat
+  if (( build_rc != 0 )); then
+    return "$build_rc"
+  fi
+
+  load_server_env_values
+  server_pid="$("$PYTHON_BIN" - \
+    "$SERVER_DIR" \
+    "$SERVER_LOG" \
+    "$SERVER_BINARY" \
+    "$SERVER_TIMEZONE_VALUE" \
+    "$SERVER_MONGODB_IP_VALUE" \
+    "$SERVER_MONGODB_PORT_VALUE" \
+    "$SERVER_MONGODB_DATABASE_VALUE" \
+    "$SERVER_MONGODB_USER_VALUE" \
+    "$SERVER_MONGODB_PASSWORD_VALUE" \
+    "$SERVER_REDIS_IP_VALUE" \
+    "$SERVER_REDIS_PORT_VALUE" \
+    "$SERVER_REDIS_PASSWORD_VALUE" <<'PY'
+import os
+import subprocess
+import sys
+
+(
+    server_dir,
+    log_path,
+    server_binary,
+    timezone,
+    mongodb_ip,
+    mongodb_port,
+    mongodb_database,
+    mongodb_user,
+    mongodb_password,
+    redis_ip,
+    redis_port,
+    redis_password,
+) = sys.argv[1:13]
+
+env = os.environ.copy()
+env.update(
+    {
+        "TIMEZONE": timezone,
+        "MONGODB_IP": mongodb_ip,
+        "MONGODB_PORT": mongodb_port,
+        "MONGODB_DATABASE": mongodb_database,
+        "MONGODB_USER": mongodb_user,
+        "MONGODB_PASSWORD": mongodb_password,
+        "MONGODB_DIRECT_CONNECTION": os.environ.get("MONGODB_DIRECT_CONNECTION", "true"),
+        "REDIS_IP": redis_ip,
+        "REDIS_PORT": redis_port,
+        "REDIS_PASSWORD": redis_password,
+    }
+)
+
+with open(log_path, "a", encoding="utf-8") as log_file:
+    proc = subprocess.Popen(
+        [server_binary],
+        cwd=server_dir,
+        env=env,
+        stdin=subprocess.DEVNULL,
+        stdout=log_file,
+        stderr=subprocess.STDOUT,
+        start_new_session=True,
+        text=True,
+    )
+
+print(proc.pid, end="")
+PY
+)"
+  printf '%s' "$server_pid" >"$SERVER_PID_FILE"
+}
+
+start_ui() {
+  local status
+  local ui_pid
+  local ui_port
+  status="$(ui_status)"
+  if [[ "$status" == "running" || "$status" == "starting" ]]; then
+    return 0
+  fi
+  ui_port="$(url_port "$UI_URL" 4000)"
+
+  mkdir -p "$UI_DIR"
+  rotate_log "$UI_LOG"
+  if [[ ! -d "$UI_DIR/node_modules/.pnpm" ]]; then
+    start_heartbeat "安装 UI 依赖（pnpm install）"
+    local install_rc=0
+    (
+      cd "$UI_DIR"
+      "$PNPM_BIN" install >>"$UI_LOG" 2>&1
+    ) || install_rc=$?
+    stop_heartbeat
+    if (( install_rc != 0 )); then
+      return "$install_rc"
+    fi
+  fi
+
+  ui_pid="$("$PYTHON_BIN" - "$UI_DIR" "$UI_LOG" "$PNPM_BIN" "$ui_port" <<'PY'
+import subprocess
+import sys
+
+ui_dir, log_path, pnpm_bin, ui_port = sys.argv[1:5]
+
+with open(log_path, "a", encoding="utf-8") as log_file:
+    proc = subprocess.Popen(
+        [pnpm_bin, "vite", "--mode", "base", "--port", ui_port, "--strictPort"],
+        cwd=ui_dir,
+        stdin=subprocess.DEVNULL,
+        stdout=log_file,
+        stderr=subprocess.STDOUT,
+        start_new_session=True,
+        text=True,
+    )
+
+print(proc.pid, end="")
+PY
+)"
+  printf '%s' "$ui_pid" >"$UI_PID_FILE"
+}
+
+reset_local_web_password() {
+  local new_password="$1"
+  local password_hash eval_js
+  [[ -n "$new_password" ]] || fail "用法: ./devctl reset-password <new-password>"
+
+  ensure_local_dirs
+  load_server_env_values
+  if ! docker_container_running "$MONGO_CONTAINER_NAME"; then
+    fail "mongodb 容器未运行，请先运行 ./devctl up 或 ./devctl install 后启动数据库"
+  fi
+
+  password_hash="$(sha256_hex "$new_password")"
+  eval_js="db.getSiblingDB(\"$SERVER_MONGODB_DATABASE_VALUE\").user.updateOne({username:\"ScopeSentry\"}, {\$set:{password:\"$password_hash\", updated_at:new Date()}})"
+
+  docker_cmd exec "$MONGO_CONTAINER_NAME" mongosh --quiet \
+    -u "$SERVER_MONGODB_USER_VALUE" \
+    -p "$SERVER_MONGODB_PASSWORD_VALUE" \
+    --authenticationDatabase admin \
+    --eval "$eval_js" >/dev/null \
+    || fail "本地密码重置失败"
+
+  printf '%s' "$new_password" >"$PASSWORD_FILE"
+  log "本地 Web 密码已重置"
+  log "Web 用户: ScopeSentry"
+  log "Web 密码: $new_password"
+  log "密码文件: $PASSWORD_FILE"
+}
+
+start_scan() {
+  ensure_local_dirs
+  rotate_log "$SCAN_LOG"
+  scan_compose up -d >"$SCAN_LOG" 2>&1
+}
+
+stop_scan() {
+  if [[ "$(scan_status)" == "stopped" ]]; then
+    return 0
+  fi
+
+  scan_compose down --remove-orphans >>"$SCAN_LOG" 2>&1 || true
+  if docker_container_running "$SCAN_CONTAINER_NAME"; then
+    docker_cmd rm -f "$SCAN_CONTAINER_NAME" >>"$SCAN_LOG" 2>&1 || true
+  fi
+  if docker_container_running "$SCAN_CONTAINER_NAME"; then
+    fail "scan 容器仍在运行: $SCAN_CONTAINER_NAME"
+  fi
+}
+
+stop_db() {
+  if [[ "$(db_status)" == "stopped" ]]; then
+    return 0
+  fi
+
+  db_compose stop mongodb redis >>"$DB_LOG" 2>&1 || true
+  if docker_container_running "$MONGO_CONTAINER_NAME"; then
+    docker_cmd rm -f "$MONGO_CONTAINER_NAME" >>"$DB_LOG" 2>&1 || true
+  fi
+  if docker_container_running "$REDIS_CONTAINER_NAME"; then
+    docker_cmd rm -f "$REDIS_CONTAINER_NAME" >>"$DB_LOG" 2>&1 || true
+  fi
+
+  if docker_container_running "$MONGO_CONTAINER_NAME"; then
+    fail "mongodb 容器仍在运行"
+  fi
+  if docker_container_running "$REDIS_CONTAINER_NAME"; then
+    fail "redis 容器仍在运行"
+  fi
+}
+
+status_cn() {
+  case "$1" in
+    running) printf '运行中' ;;
+    stopped) printf '已停止' ;;
+    starting) printf '启动中' ;;
+    partial) printf '部分运行' ;;
+    *) printf '%s' "$1" ;;
+  esac
+}
+
+password_status_cn() {
+  case "$(password_status)" in
+    present) printf '已生成' ;;
+    pending) printf '待生成' ;;
+    *) printf '未知' ;;
+  esac
+}
+
+print_status() {
+  refresh_manifest
+  printf '配置: %s\n' "$PROFILE_NAME"
+  printf 'API 地址: %s\n' "$API_URL"
+  printf 'UI 地址: %s\n' "$UI_URL"
+  printf '节点名: %s\n' "$NODE_NAME"
+  printf 'Scan 镜像: %s\n' "$SCAN_IMAGE"
+  printf '密码文件: %s (%s)\n' "$PASSWORD_FILE" "$(password_status_cn)"
+  printf 'DB: %s\n' "$(status_cn "$(db_status)")"
+  printf '后端: %s\n' "$(status_cn "$(server_status)")"
+  printf 'UI 服务: %s\n' "$(status_cn "$(ui_status)")"
+  printf '扫描端: %s\n' "$(status_cn "$(scan_status)")"
+  printf '清单文件: %s\n' "$MANIFEST_FILE"
+}
+
+on_up_interrupted() {
+  stop_heartbeat
+  printf '[devctl] 收到中断信号，正在回滚已启动的组件...\n' >&2
+  run_down >/dev/null 2>&1 || true
+  printf '[devctl] 回滚完成\n' >&2
+  exit 130
+}
+
+run_up() {
+  local redis_port server_port ui_port
+  redis_port="${SCAN_REDIS_PORT:-6379}"
+  server_port="$(url_port "$API_URL" 8082)"
+  ui_port="$(url_port "$UI_URL" 4000)"
+
+  trap on_up_interrupted INT TERM
+
+  run_install 0 >/dev/null
+  stage_set_total 4
+
+  # ---- [1/4] DB ----
+  stage_begin "db" "启动数据库（mongodb/redis）"
+  start_heartbeat "启动 mongodb/redis"
+  local db_rc=0
+  start_db || db_rc=$?
+  stop_heartbeat
+  if (( db_rc != 0 )); then
+    refresh_manifest
+    report_startup_failure "db" "docker compose 无法启动 mongodb/redis" "db" "$DB_LOG"
+  fi
+
+  wait_for_mongo_ready 90 "db" || {
+    refresh_manifest
+    report_startup_failure "db" "mongodb 未在后端启动前就绪" "db" "$DB_LOG"
+  }
+
+  wait_for_tcp_port 127.0.0.1 "$redis_port" 30 "db" || {
+    refresh_manifest
+    report_startup_failure "db" "redis 端口 $redis_port 不可达" "db" "$DB_LOG"
+  }
+  stage_end "db"
+
+  # ---- [2/4] Server ----
+  stage_begin "server" "编译并启动后端"
+  if ! start_server; then
+    refresh_manifest
+    report_startup_failure "server" "后端进程在就绪检查完成前失败" "server" "$SERVER_LOG"
+  fi
+  if wait_for_http "$API_URL" 60 "server" "$SERVER_PID_FILE" "scope-sentry-dev"; then
+    :
+  else
+    local wait_status=$?
+    refresh_manifest
+    if [[ "$wait_status" == "2" ]]; then
+      report_startup_failure "server" "后端进程在就绪检查完成前退出" "server" "$SERVER_LOG"
+    fi
+    report_startup_failure "server" "后端未能在 $API_URL 就绪" "server" "$SERVER_LOG"
+  fi
+  local embedded_ui_error=""
+  if embedded_ui_error="$(verify_server_embedded_ui_consistent "$API_URL")"; then
+    :
+  else
+    printf '%s\n' "$embedded_ui_error" >>"$SERVER_LOG"
+    stop_local_process_by_port_or_pid "$SERVER_PID_FILE" "scope-sentry-dev" "$(url_port "$API_URL" 8082)" 1
+    refresh_manifest
+    report_startup_failure "server" "$embedded_ui_error" "server" "$SERVER_LOG"
+  fi
+  wait_for_file "$PASSWORD_FILE" 30 "server" \
+    || log "警告: 密码文件仍未生成（${PASSWORD_FILE}），请查看 $SERVER_LOG"
+  stage_end "server"
+
+  # ---- [3/4] UI ----
+  stage_begin "ui" "启动 pnpm dev"
+  if ! start_ui; then
+    refresh_manifest
+    report_startup_failure "ui" "UI 进程在就绪检查完成前失败" "ui" "$UI_LOG"
+  fi
+  if wait_for_http "$UI_URL" 60 "ui" "$UI_PID_FILE" "pnpm"; then
+    :
+  else
+    local wait_status=$?
+    refresh_manifest
+    if [[ "$wait_status" == "2" ]]; then
+      report_startup_failure "ui" "UI 进程在就绪检查完成前退出" "ui" "$UI_LOG"
+    fi
+    report_startup_failure "ui" "UI 未能在 $UI_URL 就绪" "ui" "$UI_LOG"
+  fi
+  stage_end "ui"
+
+  # ---- [4/4] Scan ----
+  stage_begin "scan" "启动扫描容器"
+  if ! ensure_selected_scan_image_available; then
+    refresh_manifest
+    report_startup_failure "scan" "scan 镜像准备失败" "scan" "$SCAN_LOG" "运行 ./devctl scan rebuild"
+  fi
+  start_heartbeat "启动扫描容器"
+  local scan_rc=0
+  start_scan || scan_rc=$?
+  stop_heartbeat
+  if (( scan_rc != 0 )); then
+    refresh_manifest
+    report_startup_failure "scan" "scan 容器在 docker compose 启动期间失败" "scan" "$SCAN_LOG"
+  fi
+  wait_for_scan_container 30 "scan" || {
+    refresh_manifest
+    report_startup_failure "scan" "scan 容器未就绪" "scan" "$SCAN_LOG"
+  }
+  stage_end "scan"
+
+  trap - INT TERM
+  refresh_manifest
+  print_status
+}
+
+run_down() {
+  local server_port ui_port
+  server_port="$(url_port "$API_URL" 8082)"
+  ui_port="$(url_port "$UI_URL" 4000)"
+
+  ensure_local_dirs
+  stage_set_total 4
+
+  stage_begin "server" "停止后端进程"
+  # scope-sentry-dev 是自建二进制，名字唯一，保留 pgrep 兜底
+  stop_local_process_by_port_or_pid "$SERVER_PID_FILE" "scope-sentry-dev" "$server_port" 1
+  stage_end "server"
+
+  stage_begin "ui" "停止 UI（pnpm dev）"
+  # pnpm 太宽泛，关闭 pgrep 兜底，避免误杀其他项目的 pnpm 进程
+  stop_local_process_by_port_or_pid "$UI_PID_FILE" "pnpm" "$ui_port" 0
+  stage_end "ui"
+
+  stage_begin "scan" "停止扫描容器"
+  stop_scan
+  stage_end "scan"
+
+  stage_begin "db" "停止数据库容器"
+  stop_db
+  stage_end "db"
+
+  refresh_manifest
+
+  [[ "$(server_status)" == "stopped" ]] || fail "后端进程仍在运行"
+  [[ "$(ui_status)" == "stopped" ]] || fail "UI 进程仍在运行"
+  [[ "$(scan_status)" == "stopped" ]] || fail "scan 容器仍在运行"
+  [[ "$(db_status)" == "stopped" ]] || fail "数据库容器仍在运行"
+  log "全部服务已停止"
+}
+
+build_scan_binary() {
+  # 在宿主机交叉编译 Linux amd64 Go 二进制到 $SCAN_DIST_BINARY。
+  # 结果由 compose override bind-mount 进容器，不再 COPY 到镜像里。
+  local go_cache_dir go_mod_cache_dir go_proxy_value
+  go_cache_dir="$CACHE_DIR/go-build/scope-scan-docker-image"
+  go_mod_cache_dir="$CACHE_DIR/go-mod"
+  go_proxy_value="${GO_PROXY_URL:-${GOPROXY:-https://proxy.golang.org,direct}}"
+
+  mkdir -p "$go_cache_dir" "$go_mod_cache_dir" "$SCAN_DIST_DIR"
+
+  local rc=0
+  (
+    cd "$SCAN_DIR"
+    GOCACHE="$go_cache_dir" \
+    GOMODCACHE="$go_mod_cache_dir" \
+    GOPROXY="$go_proxy_value" \
+    CGO_ENABLED=0 \
+    GOOS=linux \
+    GOARCH=amd64 \
+    "$GO_BIN" build -o "$SCAN_DIST_BINARY" ./cmd/ScopeSentry/main.go
+  ) >>"$SCAN_LOG" 2>&1 || rc=$?
+  return "$rc"
+}
+
+ensure_oneforall_archive() {
+  local archive_dir archive_path archive_tmp archive_url
+  archive_dir="$SCAN_DIR/third_party"
+  archive_path="$archive_dir/oneforall.tar.gz"
+  archive_tmp="$archive_path.tmp"
+  archive_url="${ONEFORALL_ARCHIVE_URL:-https://github.com/shmilylty/OneForAll/archive/refs/heads/master.tar.gz}"
+
+  if [[ -s "$archive_path" ]]; then
+    return 0
+  fi
+
+  command_exists "$CURL_BIN" || fail "缺少 curl，无法下载 OneForAll 源码包"
+  mkdir -p "$archive_dir"
+  log "下载 OneForAll 源码包: $archive_url"
+  "$CURL_BIN" -fsSL "$archive_url" -o "$archive_tmp" || {
+    rm -f "$archive_tmp"
+    fail "OneForAll 源码包下载失败: $archive_url"
+  }
+  mv -f "$archive_tmp" "$archive_path"
+}
+
+build_local_scan_base_image() {
+  # 重度依赖层（chromium、puredns/massdns、apt 包、字体、tz）。构建慢但很少重建。
+  mkdir -p "$SCAN_DIST_DIR"
+  local attempt rc apt_mirror apt_security_mirror pip_index_url
+  apt_mirror="${SCAN_APT_MIRROR:-https://mirrors.aliyun.com/debian}"
+  apt_security_mirror="${SCAN_APT_SECURITY_MIRROR:-https://mirrors.aliyun.com/debian-security}"
+  pip_index_url="${SCAN_PIP_INDEX_URL:-https://mirrors.aliyun.com/pypi/simple}"
+  for (( attempt = 1; attempt <= DEVCTL_SCAN_BUILD_RETRIES; attempt++ )); do
+    log "scan base 镜像构建尝试 ${attempt}/${DEVCTL_SCAN_BUILD_RETRIES}"
+    printf '\n[devctl] scan base 镜像构建尝试 %s/%s\n' \
+      "$attempt" "$DEVCTL_SCAN_BUILD_RETRIES" >>"$SCAN_LOG"
+    printf '[devctl] scan base 构建源: apt=%s security=%s pip=%s\n' \
+      "$apt_mirror" "$apt_security_mirror" "$pip_index_url" >>"$SCAN_LOG"
+
+    start_heartbeat "构建 scan base 镜像（尝试 ${attempt}/${DEVCTL_SCAN_BUILD_RETRIES}）"
+    rc=0
+    (
+      cd "$SCAN_DIR"
+      DOCKER_BUILDKIT=1 \
+      "$DOCKER_BIN" build \
+        -f "$SCAN_BASE_DOCKERFILE" \
+        --build-arg "APT_MIRROR=$apt_mirror" \
+        --build-arg "APT_SECURITY_MIRROR=$apt_security_mirror" \
+        --build-arg "PIP_INDEX_URL=$pip_index_url" \
+        -t "$LOCAL_SCAN_BASE_IMAGE" .
+    ) >>"$SCAN_LOG" 2>&1 || rc=$?
+    stop_heartbeat
+
+    if (( rc == 0 )); then
+      return 0
+    fi
+
+    if (( attempt < DEVCTL_SCAN_BUILD_RETRIES )); then
+      log "scan base 镜像构建失败（${attempt}/${DEVCTL_SCAN_BUILD_RETRIES}），${DEVCTL_SCAN_BUILD_RETRY_DELAY}s 后重试"
+      sleep "$DEVCTL_SCAN_BUILD_RETRY_DELAY"
+      continue
+    fi
+
+    log "scan base 镜像构建失败（${attempt}/${DEVCTL_SCAN_BUILD_RETRIES}），已达最大重试次数"
+    return 1
+  done
+}
+
+scan_app_build_base_image() {
+  if docker_image_exists "$LOCAL_SCAN_BASE_IMAGE"; then
+    printf '%s' "$LOCAL_SCAN_BASE_IMAGE"
+    return 0
+  fi
+  if docker_image_exists "$LOCAL_SCAN_IMAGE"; then
+    printf '%s' "$LOCAL_SCAN_IMAGE"
+    return 0
+  fi
+  return 1
+}
+
+build_local_scan_image() {
+  # App 层（tools/linux/* + 解析器文件）。轻量、~10-20s。
+  # 优先基于 base 镜像；base 缺失但 app 镜像存在时可复用 app 镜像叠加一层。
+  mkdir -p "$SCAN_DIST_DIR"
+  local attempt rc pip_index_url oneforall_archive_url scan_base_image
+  pip_index_url="${SCAN_PIP_INDEX_URL:-https://mirrors.aliyun.com/pypi/simple}"
+  oneforall_archive_url="${ONEFORALL_ARCHIVE_URL:-https://github.com/shmilylty/OneForAll/archive/refs/heads/master.tar.gz}"
+  ensure_oneforall_archive
+  scan_base_image="$(scan_app_build_base_image)" || {
+    log "未找到 scan base/app 镜像，开始构建 base 镜像"
+    ensure_scan_base_image_available || return $?
+    scan_base_image="$LOCAL_SCAN_BASE_IMAGE"
+  }
+  if [[ "$scan_base_image" == "$LOCAL_SCAN_IMAGE" ]]; then
+    log "scan base 镜像缺失，复用现有 app 镜像 ${LOCAL_SCAN_IMAGE} 作为构建底座"
+  fi
+  for (( attempt = 1; attempt <= DEVCTL_SCAN_BUILD_RETRIES; attempt++ )); do
+    log "scan 镜像构建尝试 ${attempt}/${DEVCTL_SCAN_BUILD_RETRIES}"
+    printf '\n[devctl] scan 镜像构建尝试 %s/%s\n' "$attempt" "$DEVCTL_SCAN_BUILD_RETRIES" >>"$SCAN_LOG"
+    printf '[devctl] scan 构建源: oneforall=%s pip=%s\n' \
+      "$oneforall_archive_url" "$pip_index_url" >>"$SCAN_LOG"
+
+    start_heartbeat "构建 scan 镜像（尝试 ${attempt}/${DEVCTL_SCAN_BUILD_RETRIES}）"
+    rc=0
+    (
+      cd "$SCAN_DIR"
+      DOCKER_BUILDKIT=1 \
+      "$DOCKER_BIN" build \
+        -f "$SCAN_APP_DOCKERFILE" \
+        --build-arg "SCAN_BASE_IMAGE=$scan_base_image" \
+        --build-arg "ONEFORALL_ARCHIVE=third_party/oneforall.tar.gz" \
+        --build-arg "PIP_INDEX_URL=$pip_index_url" \
+        -t "$LOCAL_SCAN_IMAGE" .
+    ) >>"$SCAN_LOG" 2>&1 || rc=$?
+    stop_heartbeat
+
+    if (( rc == 0 )); then
+      SCAN_IMAGE="$LOCAL_SCAN_IMAGE"
+      return 0
+    fi
+
+    if (( attempt < DEVCTL_SCAN_BUILD_RETRIES )); then
+      log "scan 镜像构建失败（${attempt}/${DEVCTL_SCAN_BUILD_RETRIES}），${DEVCTL_SCAN_BUILD_RETRY_DELAY}s 后重试"
+      sleep "$DEVCTL_SCAN_BUILD_RETRY_DELAY"
+      continue
+    fi
+
+    log "scan 镜像构建失败（${attempt}/${DEVCTL_SCAN_BUILD_RETRIES}），已达最大重试次数"
+    return 1
+  done
+
+  SCAN_IMAGE="$LOCAL_SCAN_IMAGE"
+}
+
+ensure_scan_base_image_available() {
+  if docker_image_exists "$LOCAL_SCAN_BASE_IMAGE"; then
+    return 0
+  fi
+  log "未找到 scan base 镜像 ${LOCAL_SCAN_BASE_IMAGE}，开始构建（首次 5-10 分钟）"
+  rotate_log "$SCAN_LOG"
+  build_local_scan_base_image
+}
+
+ensure_scan_binary_available() {
+  if [[ -x "$SCAN_DIST_BINARY" ]]; then
+    return 0
+  fi
+  log "未找到 scan 二进制 ${SCAN_DIST_BINARY}，开始编译"
+  start_heartbeat "编译 scan 二进制"
+  local rc=0
+  build_scan_binary || rc=$?
+  stop_heartbeat
+  if (( rc != 0 )); then
+    tail_log_excerpt "scan" "$SCAN_LOG"
+    return "$rc"
+  fi
+  return 0
+}
+
+ensure_selected_scan_image_available() {
+  if [[ "$SCAN_IMAGE" != "$LOCAL_SCAN_IMAGE" ]]; then
+    if docker_image_exists "$SCAN_IMAGE"; then
+      ensure_scan_binary_available || return $?
+      return 0
+    fi
+    log "scan 镜像 $SCAN_IMAGE 不在本地，尝试 docker pull"
+    rotate_log "$SCAN_LOG"
+    start_heartbeat "拉取 scan 镜像 $SCAN_IMAGE"
+    local pull_rc=0
+    docker_cmd pull "$SCAN_IMAGE" >>"$SCAN_LOG" 2>&1 || pull_rc=$?
+    stop_heartbeat
+    if (( pull_rc != 0 )); then
+      log "拉取 scan 镜像失败: $SCAN_IMAGE"
+      return 1
+    fi
+    ensure_scan_binary_available || return $?
+    return 0
+  fi
+
+  # 本地镜像路径：app 存在则跳过整个构建链。
+  if docker_image_exists "$LOCAL_SCAN_IMAGE"; then
+    ensure_scan_binary_available || return $?
+    return 0
+  fi
+
+  # App 不存在：需要 base 在场才能构建 app。
+  ensure_scan_base_image_available || return $?
+
+  log "未找到 scan 镜像 ${SCAN_IMAGE}，开始构建本地镜像"
+  rotate_log "$SCAN_LOG"
+  build_local_scan_image || return $?
+  save_devctl_env
+  ensure_scan_binary_available || return $?
+}
+
+run_scan_rebuild() {
+  run_install 0 >/dev/null
+
+  rotate_log "$SCAN_LOG"
+  build_local_scan_image
+  save_devctl_env
+  ensure_scan_binary_available || fail "scan 二进制编译失败"
+  stop_scan || true
+  start_scan
+  wait_for_scan_container 30 || {
+    refresh_manifest
+    tail_log_excerpt "scan" "$SCAN_LOG"
+    fail "scan 容器在重建后未返回"
+  }
+  refresh_manifest
+  log "scan 镜像已重建: $SCAN_IMAGE"
+}
+
+run_scan_rebuild_base() {
+  run_install 0 >/dev/null
+
+  rotate_log "$SCAN_LOG"
+  log "强制重建 scan base 镜像（${LOCAL_SCAN_BASE_IMAGE}）"
+  build_local_scan_base_image || fail "scan base 镜像构建失败"
+  log "base 已重建，连带重建 app 镜像"
+  build_local_scan_image || fail "scan 镜像构建失败"
+  save_devctl_env
+  ensure_scan_binary_available || fail "scan 二进制编译失败"
+  stop_scan || true
+  start_scan
+  wait_for_scan_container 30 || {
+    refresh_manifest
+    tail_log_excerpt "scan" "$SCAN_LOG"
+    fail "scan 容器在重建后未返回"
+  }
+  refresh_manifest
+  log "scan base + app 镜像均已重建"
+}
+
+ghcr_load_conf() {
+  GHCR_OWNER=""
+  GHCR_TOKEN=""
+  if [[ -f "$GHCR_CONFIG_FILE" ]]; then
+    set +u
+    # shellcheck disable=SC1090
+    source "$GHCR_CONFIG_FILE"
+    set -u
+  fi
+}
+
+ghcr_require_conf() {
+  ghcr_load_conf
+  if [[ -z "${GHCR_OWNER:-}" || -z "${GHCR_TOKEN:-}" ]]; then
+    fail "尚未配置 GHCR 凭据。
+
+请先创建 ${GHCR_CONFIG_FILE}，内容形如：
+  GHCR_OWNER=<your-github-username-or-org>
+  GHCR_TOKEN=<github-classic-PAT-with-write:packages-scope>
+
+然后限制权限：
+  chmod 600 ${GHCR_CONFIG_FILE}
+
+注意：要用 classic PAT，不是 fine-grained。
+  打开 https://github.com/settings/tokens
+  → 右上 'Generate new token' 下拉箭头 → 'Generate new token (classic)'
+  → 勾 'write:packages' (read:packages 会自动带上)"
+  fi
+}
+
+run_scan_publish_base() {
+  local custom_tag=""
+  local push_latest=1
+  while (( $# > 0 )); do
+    case "$1" in
+      --tag)
+        [[ -n "${2:-}" ]] || fail "--tag 需要参数"
+        custom_tag="$2"
+        shift 2
+        ;;
+      --no-latest)
+        push_latest=0
+        shift
+        ;;
+      *)
+        fail "未知参数: $1。用法: ./devctl scan publish-base [--tag vX.Y] [--no-latest]"
+        ;;
+    esac
+  done
+
+  ghcr_require_conf
+
+  if ! docker_image_exists "$LOCAL_SCAN_BASE_IMAGE"; then
+    log "本地 base 镜像 $LOCAL_SCAN_BASE_IMAGE 不存在，先调用 build_local_scan_base_image 构建"
+    build_local_scan_base_image || fail "scan base 镜像构建失败"
+  fi
+
+  local tag remote_repo remote_tagged remote_latest
+  tag="${custom_tag:-$(date +v%Y.%m.%d-%H%M%S)}"
+  remote_repo="${GHCR_REGISTRY}/${GHCR_OWNER}/${GHCR_BASE_REPO_NAME}"
+  remote_tagged="${remote_repo}:${tag}"
+  remote_latest="${remote_repo}:latest"
+
+  log "登录 ${GHCR_REGISTRY}（用户 ${GHCR_OWNER}）"
+  if ! printf '%s' "$GHCR_TOKEN" | docker_cmd login "$GHCR_REGISTRY" --username "$GHCR_OWNER" --password-stdin >/dev/null; then
+    fail "GHCR 登录失败，请检查 $GHCR_CONFIG_FILE 中的 GHCR_OWNER / GHCR_TOKEN"
+  fi
+
+  log "打 tag：$LOCAL_SCAN_BASE_IMAGE → $remote_tagged"
+  docker_cmd tag "$LOCAL_SCAN_BASE_IMAGE" "$remote_tagged" \
+    || fail "docker tag 失败"
+
+  log "推送 $remote_tagged"
+  if ! docker_cmd push "$remote_tagged"; then
+  fail "docker push 失败。如果是 unauthorized，确认 PAT 有 write:packages 权限；如果是 denied: requested access to the resource is denied，确认 GHCR_OWNER 拼写正确且首次推送已在 https://github.com/${GHCR_OWNER}?tab=packages 把 ${GHCR_BASE_REPO_NAME} 的可见性设为 public（或保持 private 但下次让节点能 pull）。"
+  fi
+
+  if (( push_latest )); then
+    docker_cmd tag "$LOCAL_SCAN_BASE_IMAGE" "$remote_latest" \
+      || fail "docker tag latest 失败"
+    log "推送 $remote_latest"
+    docker_cmd push "$remote_latest" || fail "docker push latest 失败"
+  fi
+
+  log "发布完成"
+  log "  $remote_tagged"
+  if (( push_latest )); then
+    log "  $remote_latest"
+  fi
+  log "节点端拉取： docker pull $remote_latest"
+}
+
+run_scan_publish() {
+  # 推送"完整" scan 镜像（base + tools + Go 二进制）到 GHCR。
+  # 节点拉到这一个镜像就能直接跑，不再需要 SSH bind-mount 二进制。
+  # 内部：build_scan_binary（交叉编译 linux/amd64）+ docker build -f dockerfile.release + tag + push
+  local custom_tag=""
+  local push_latest=1
+  while (( $# > 0 )); do
+    case "$1" in
+      --tag)
+        [[ -n "${2:-}" ]] || fail "--tag 需要参数"
+        custom_tag="$2"
+        shift 2
+        ;;
+      --no-latest)
+        push_latest=0
+        shift
+        ;;
+      *)
+        fail "未知参数: $1。用法: ./devctl scan publish [--tag vX.Y] [--no-latest]"
+        ;;
+    esac
+  done
+
+  ghcr_require_conf
+
+  # base 镜像必须先 publish 过。dockerfile.release 用 SCAN_BASE_IMAGE 作为 FROM。
+  # 这里把 GHCR 上的 base latest 作为 build arg，确保和 publish-base 同源。
+  local base_ref="${GHCR_REGISTRY}/${GHCR_OWNER}/${GHCR_BASE_REPO_NAME}:latest"
+  if ! docker_image_exists "$base_ref"; then
+    log "本地没有 ${base_ref}，先 docker pull"
+    if ! docker_cmd pull "$base_ref" 2>>"$SCAN_LOG"; then
+      fail "拉取 base 镜像失败。请先跑 ./devctl scan publish-base 推一次 base，再来跑 scan publish。"
+    fi
+  fi
+
+  log "1/4 交叉编译 Go 二进制（linux/amd64）"
+  rotate_log "$SCAN_LOG"
+  start_heartbeat "build_scan_binary"
+  local rc=0
+  build_scan_binary || rc=$?
+  stop_heartbeat
+  if (( rc != 0 )); then
+    tail_log_excerpt "scan" "$SCAN_LOG"
+    fail "scan 二进制编译失败"
+  fi
+  [[ -x "$SCAN_DIST_BINARY" ]] || fail "二进制不在 ${SCAN_DIST_BINARY}"
+
+  local tag remote_repo remote_tagged remote_latest local_image_tag
+  tag="${custom_tag:-$(date +v%Y.%m.%d-%H%M%S)}"
+  remote_repo="${GHCR_REGISTRY}/${GHCR_OWNER}/${GHCR_SCAN_REPO_NAME}"
+  remote_tagged="${remote_repo}:${tag}"
+  remote_latest="${remote_repo}:latest"
+  local_image_tag="scopesentry-scan:${tag}"
+
+  log "2/4 docker build -f dockerfile.release → ${local_image_tag}"
+  start_heartbeat "docker build scan release"
+  local build_rc=0
+  (
+    cd "$SCAN_DIR"
+    DOCKER_BUILDKIT=1 "$DOCKER_BIN" build \
+      -f dockerfile.release \
+      --build-arg "SCAN_BASE_IMAGE=${base_ref}" \
+      -t "$local_image_tag" \
+      .
+  ) >>"$SCAN_LOG" 2>&1 || build_rc=$?
+  stop_heartbeat
+  if (( build_rc != 0 )); then
+    tail_log_excerpt "scan" "$SCAN_LOG"
+    fail "docker build 失败，请查看 ${SCAN_LOG}"
+  fi
+
+  log "3/4 登录 ${GHCR_REGISTRY}（用户 ${GHCR_OWNER}）"
+  if ! printf '%s' "$GHCR_TOKEN" | docker_cmd login "$GHCR_REGISTRY" --username "$GHCR_OWNER" --password-stdin >/dev/null; then
+    fail "GHCR 登录失败，请检查 ${GHCR_CONFIG_FILE}"
+  fi
+
+  docker_cmd tag "$local_image_tag" "$remote_tagged" || fail "docker tag 失败"
+  log "4/4 推送 ${remote_tagged}"
+  if ! docker_cmd push "$remote_tagged"; then
+    fail "docker push 失败。首次推送后到 https://github.com/${GHCR_OWNER}?tab=packages 把 ${GHCR_SCAN_REPO_NAME} 设为 public。"
+  fi
+  if (( push_latest )); then
+    docker_cmd tag "$local_image_tag" "$remote_latest" || fail "docker tag latest 失败"
+    log "推送 ${remote_latest}"
+    docker_cmd push "$remote_latest" || fail "docker push latest 失败"
+  fi
+
+  log "完整 scan 镜像发布完成"
+  log "  ${remote_tagged}"
+  if (( push_latest )); then
+    log "  ${remote_latest}"
+  fi
+  log "节点端更新："
+  log "  curl -fsSL https://raw.githubusercontent.com/${GHCR_OWNER}/<repo>/main/scripts/update-node.sh | bash"
+}
+
+run_scan_reload() {
+  ensure_local_dirs
+  if ! docker_container_running "$SCAN_CONTAINER_NAME"; then
+    fail "scan 容器未运行，请先运行 ./devctl up 或 ./devctl scan rebuild"
+  fi
+
+  stage_set_total 2
+  stage_begin "build" "交叉编译 Go 二进制"
+  rotate_log "$SCAN_LOG"
+  start_heartbeat "编译 scan 二进制"
+  local rc=0
+  build_scan_binary || rc=$?
+  stop_heartbeat
+  if (( rc != 0 )); then
+    tail_log_excerpt "scan" "$SCAN_LOG"
+    fail "scan 二进制编译失败"
+  fi
+  stage_end "build"
+
+  stage_begin "restart" "重启 scan 容器"
+  docker_cmd restart "$SCAN_CONTAINER_NAME" >>"$SCAN_LOG" 2>&1 \
+    || fail "docker restart 失败，请查看 $SCAN_LOG"
+  wait_for_scan_container 30 "restart" \
+    || fail "scan 容器在重启后未返回运行状态"
+  stage_end "restart"
+  refresh_manifest
+  log "scan 已热加载（二进制已刷新）"
+}
+
+run_server_publish() {
+  # 构建 + 推送 server 镜像到 GHCR。
+  # 复用 build_server_prod_binary（pnpm build:pro + embed UI + 交叉编译）。
+  # 镜像本体由 ScopeSentry/dockerfile 在本地 docker build 出来，
+  # 与 deploy push 不同——deploy push 是在远端 build，这里是 dev 机 build 后推 registry。
+  local custom_tag=""
+  local push_latest=1
+  while (( $# > 0 )); do
+    case "$1" in
+      --tag)
+        [[ -n "${2:-}" ]] || fail "--tag 需要参数"
+        custom_tag="$2"
+        shift 2
+        ;;
+      --no-latest)
+        push_latest=0
+        shift
+        ;;
+      *)
+        fail "未知参数: $1。用法: ./devctl server publish [--tag vX.Y] [--no-latest]"
+        ;;
+    esac
+  done
+
+  ghcr_require_conf
+
+  log "1/4 构建 server prod 二进制（pnpm build:pro + embed UI + 交叉编译）"
+  build_server_prod_binary
+  [[ -x "$SERVER_DIST_BINARY" ]] || fail "二进制不在 ${SERVER_DIST_BINARY}"
+
+  local local_image_tag="$DEPLOY_SERVER_IMAGE"
+  log "2/4 本地 docker build → ${local_image_tag}"
+  rotate_log "$SERVER_LOG"
+  start_heartbeat "本地 docker build server 镜像"
+  local build_rc=0
+  (
+    cd "$SERVER_DIR"
+    DOCKER_BUILDKIT=1 "$DOCKER_BIN" build -f dockerfile -t "$local_image_tag" .
+  ) >>"$SERVER_LOG" 2>&1 || build_rc=$?
+  stop_heartbeat
+  (( build_rc == 0 )) || {
+    tail_log_excerpt "server" "$SERVER_LOG"
+    fail "docker build 失败，请查看 ${SERVER_LOG}"
+  }
+
+  local tag remote_repo remote_tagged remote_latest
+  tag="${custom_tag:-$(date +v%Y.%m.%d-%H%M%S)}"
+  remote_repo="${GHCR_REGISTRY}/${GHCR_OWNER}/${GHCR_SERVER_REPO_NAME}"
+  remote_tagged="${remote_repo}:${tag}"
+  remote_latest="${remote_repo}:latest"
+
+  log "3/4 登录 ${GHCR_REGISTRY}（用户 ${GHCR_OWNER}）"
+  if ! printf '%s' "$GHCR_TOKEN" | docker_cmd login "$GHCR_REGISTRY" --username "$GHCR_OWNER" --password-stdin >/dev/null; then
+    fail "GHCR 登录失败，请检查 ${GHCR_CONFIG_FILE}"
+  fi
+
+  log "打 tag：${local_image_tag} → ${remote_tagged}"
+  docker_cmd tag "$local_image_tag" "$remote_tagged" \
+    || fail "docker tag 失败"
+
+  log "4/4 推送 ${remote_tagged}"
+  if ! docker_cmd push "$remote_tagged"; then
+    fail "docker push 失败。如果是 denied/unauthorized，确认 PAT 有 write:packages 权限；首次推送后需要在 https://github.com/${GHCR_OWNER}?tab=packages 把 ${GHCR_SERVER_REPO_NAME} 设为 public（或保持 private 但目标机要 docker login）。"
+  fi
+
+  if (( push_latest )); then
+    docker_cmd tag "$local_image_tag" "$remote_latest" \
+      || fail "docker tag latest 失败"
+    log "推送 ${remote_latest}"
+    docker_cmd push "$remote_latest" || fail "docker push latest 失败"
+  fi
+
+  log "发布完成"
+  log "  ${remote_tagged}"
+  if (( push_latest )); then
+    log "  ${remote_latest}"
+  fi
+  log "目标机器一键安装（先把 scripts/install-server.sh 推到你 fork 的 main）："
+  log "  curl -fsSL https://raw.githubusercontent.com/${GHCR_OWNER}/<repo-name>/main/scripts/install-server.sh | bash"
+}
+
+run_update() {
+  run_install 0 >/dev/null
+  start_heartbeat "更新 UI 依赖（pnpm install）"
+  local pnpm_rc=0
+  (
+    cd "$UI_DIR"
+    "$PNPM_BIN" install >>"$UI_LOG" 2>&1
+  ) || pnpm_rc=$?
+  stop_heartbeat
+  if (( pnpm_rc != 0 )); then
+    fail "更新期间 pnpm install 失败，请查看 $UI_LOG"
+  fi
+  stop_local_process_by_port_or_pid "$SERVER_PID_FILE" "scope-sentry-dev" "$(url_port "$API_URL" 8082)" 1
+  stop_local_process_by_port_or_pid "$UI_PID_FILE" "pnpm" "$(url_port "$UI_URL" 4000)" 0
+  start_db
+  wait_for_mongo_ready 90 || fail "更新期间 mongodb 未就绪"
+  wait_for_tcp_port 127.0.0.1 "${SCAN_REDIS_PORT:-6379}" 30 || fail "更新期间 redis 端口不可达"
+  start_server
+  if wait_for_http "$API_URL" 60 "" "$SERVER_PID_FILE" "scope-sentry-dev"; then
+    :
+  else
+    local wait_status=$?
+    if [[ "$wait_status" == "2" ]]; then
+      fail "更新期间后端进程在就绪检查前退出"
+    fi
+    fail "更新期间后端未就绪"
+  fi
+  local embedded_ui_error=""
+  if embedded_ui_error="$(verify_server_embedded_ui_consistent "$API_URL")"; then
+    :
+  else
+    printf '%s\n' "$embedded_ui_error" >>"$SERVER_LOG"
+    stop_local_process_by_port_or_pid "$SERVER_PID_FILE" "scope-sentry-dev" "$(url_port "$API_URL" 8082)" 1
+    refresh_manifest
+    fail "更新期间后端嵌入前端校验失败：$embedded_ui_error"
+  fi
+  start_ui
+  if wait_for_http "$UI_URL" 60 "" "$UI_PID_FILE" "pnpm"; then
+    :
+  else
+    local wait_status=$?
+    if [[ "$wait_status" == "2" ]]; then
+      fail "更新期间 UI 进程在就绪检查前退出"
+    fi
+    fail "更新期间 UI 未就绪"
+  fi
+  run_scan_rebuild
+  refresh_manifest
+  log "本地开发环境已更新"
+}
+
+clean_dir_contents() {
+  local dir="$1"
+  [[ -d "$dir" ]] || return 0
+  find "$dir" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
+}
+
+run_clean() {
+  ensure_local_dirs
+  clean_dir_contents "$LOG_DIR"
+  clean_dir_contents "$PID_DIR"
+  clean_dir_contents "$CACHE_DIR"
+  clean_dir_contents "$TMP_RUNTIME_DIR"
+  refresh_manifest
+  log "临时文件已清理"
+}
+
+run_uninstall() {
+  local purge="${1:-0}"
+  run_down >/dev/null 2>&1 || true
+  rm -rf "$LOCAL_DEV_DIR"
+  if [[ "$purge" == "1" ]]; then
+    rm -rf \
+      "$SERVER_DIR/data/mongodb" \
+      "$SERVER_DIR/data/redis"
+  fi
+  log "本地开发运行时已移除"
+}
+
+run_logs() {
+  local target="${1:-}"
+  case "$target" in
+    server)
+      exec tail -n 200 -f "$SERVER_LOG"
+      ;;
+    ui)
+      exec tail -n 200 -f "$UI_LOG"
+      ;;
+    scan)
+      exec docker_cmd logs --tail 200 -f "$SCAN_CONTAINER_NAME"
+      ;;
+    db)
+      exec db_compose logs -f mongodb redis
+      ;;
+    *)
+      fail "用法: ./devctl logs server|ui|scan|db"
+      ;;
+  esac
+}
+
+main() {
+  local command="${1:-status}"
+  shift || true
+
+  case "$command" in
+    install)
+      local force=0
+      if [[ "${1:-}" == "--force" ]]; then
+        force=1
+      fi
+      run_install "$force"
+      ;;
+    doctor)
+      run_doctor
+      ;;
+    up)
+      run_up
+      ;;
+    down)
+      run_down
+      ;;
+    restart)
+      log "===== 重启：停机阶段 ====="
+      run_down
+      log "===== 重启：启动阶段 ====="
+      run_up
+      ;;
+    status)
+      print_status
+      ;;
+    logs)
+      run_logs "${1:-}"
+      ;;
+    reset-password)
+      reset_local_web_password "${1:-}"
+      ;;
+    update)
+      run_update
+      ;;
+    scan)
+      case "${1:-}" in
+        reload)
+          run_scan_reload
+          ;;
+        rebuild)
+          run_scan_rebuild
+          ;;
+        rebuild-base)
+          run_scan_rebuild_base
+          ;;
+        publish-base)
+          shift
+          run_scan_publish_base "$@"
+          ;;
+        publish)
+          shift
+          run_scan_publish "$@"
+          ;;
+        *)
+          fail "用法: ./devctl scan reload|rebuild|rebuild-base|publish-base|publish"
+          ;;
+      esac
+      ;;
+    server)
+      case "${1:-}" in
+        publish)
+          shift
+          run_server_publish "$@"
+          ;;
+        *)
+          fail "用法: ./devctl server publish [--tag vX.Y] [--no-latest]"
+          ;;
+      esac
+      ;;
+    deploy)
+      fail "deploy 子命令已移除。请改用 ./devctl scan publish / server publish 推 GHCR，然后到目标机器跑 scripts/install-{node,server}.sh。详见 DEPLOY_SERVER.md / DEPLOY_NODE.md。"
+      ;;
+    clean)
+      run_clean
+      ;;
+    uninstall)
+      local purge=0
+      if [[ "${1:-}" == "--purge" ]]; then
+        purge=1
+      fi
+      run_uninstall "$purge"
+      ;;
+    help|-h|--help)
+      usage
+      ;;
+    *)
+      usage
+      exit 1
+      ;;
+  esac
+}
+
+main "$@"

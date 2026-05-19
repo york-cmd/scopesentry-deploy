@@ -1,0 +1,36 @@
+# secrets / 密钥
+PLUGINKEY
+.env
+*.env
+!scripts/**/*.env.example
+
+# Claude / 编辑器状态
+.claude/
+.vscode/
+.idea/
+
+# 上游子仓库（它们各自是 git 仓库，指向 Autumn-27/...，本仓库不纳入）
+ScopeSentry/
+ScopeSentry-Scan/
+ScopeSentry-UI/
+official/
+
+# 本地开发数据 / 运行时
+.local-dev/
+.local-debug.archive/
+
+# 临时/缓存
+*.log
+*.pid
+*.swp
+.DS_Store
+__pycache__/
+*.pyc
+node_modules/
+dist/
+build/
+tmp/
+
+# scratch / debug 测试残留
+scripts/tests/.tmp-*
+scripts/tests/tmp.debug.*
