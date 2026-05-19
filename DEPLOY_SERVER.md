@@ -102,35 +102,76 @@ SCOPESENTRY_IMAGE_TAG=v2026.05.18-101530 API_PORT=8443 \
 
 部署完后立刻做这一步，否则 UI 上"添加节点"会因 `node_bootstrap` 未配置而报错。
 
-```bash
-# 在服务端 docker exec 进去改 config，或者持久化到一个挂载的 config.yaml
-docker exec -it scope-sentry sh
-# 编辑 /opt/ScopeSentry/config.yaml（容器内）添加：
-```
+### 1. 在服务器上一行命令生成 yaml 片段
 
-```yaml
+直接复制下面这段到 ssh 终端，输出可粘进 config.yaml：
+
+```bash
+set -a; source /opt/scopesentry/.env; set +a
+PUBLIC_IP="${PUBLIC_IP:-$(curl -fsS --max-time 5 ifconfig.me)}"
+GHCR_OWNER=$(echo "$SERVER_IMAGE" | sed -E 's|^ghcr\.io/([^/]+)/.*|\1|')
+cat <<EOF
 node_bootstrap:
-  scan_image: "ghcr.io/<owner>/scopesentry-scan-base:latest"
-  public_server_url: "http://<server-public-ip>:8082"
-  timezone: "Asia/Shanghai"
+  scan_image: "ghcr.io/${GHCR_OWNER}/scopesentry-scan:latest"
+  public_server_url: "http://${PUBLIC_IP}:${API_PORT}"
+  timezone: "${TIMEZONE}"
   mongodb:
-    host: "<server-public-ip>"
-    port: 37017             # 与上面 MONGO_PORT_EXT 一致
+    host: "${PUBLIC_IP}"
+    port: ${MONGO_PORT_EXT}
     database: "ScopeSentry"
-    username: "scopesentry"           # 从 /opt/scopesentry/.env 读 MONGO_INITDB_ROOT_USERNAME
-    password: "<32-char-mongo-pw>"    # 从 /opt/scopesentry/.env 读 MONGO_INITDB_ROOT_PASSWORD
+    username: "${MONGO_INITDB_ROOT_USERNAME}"
+    password: "${MONGO_INITDB_ROOT_PASSWORD}"
   redis:
-    host: "<server-public-ip>"
-    port: 16379             # 与 REDIS_PORT_EXT 一致
-    password: "<32-char-redis-pw>"    # 从 /opt/scopesentry/.env 读
+    host: "${PUBLIC_IP}"
+    port: ${REDIS_PORT_EXT}
+    password: "${REDIS_PASSWORD}"
+EOF
 ```
 
-改完重启 server：
+字段含义：
+
+| 字段 | 来源 |
+|------|------|
+| `scan_image` | 节点 docker pull 的目标——**完整 scan 镜像**（不是 scan-base）。owner 自动从 `.env` 的 `SERVER_IMAGE` 提取 |
+| `public_server_url` | 节点反连服务端 API 的 URL。`PUBLIC_IP` 自动从 ifconfig.me 取，需自定义改成 `PUBLIC_IP=1.2.3.4` 前置环境变量 |
+| `timezone` | 容器内时区，install 时写到 `.env` |
+| `mongodb.host` / `redis.host` | 节点跨网回连，必须公网 IP，不能是 127.0.0.1 |
+| `mongodb.port` / `redis.port` | install-server.sh 默认 `37017 / 16379`，避开公网爬虫常扫的默认端口 |
+| `mongodb.username` / `password` | install 时随机生成 32 字节，从 `.env` 读取 |
+| `redis.password` | 同上 |
+
+### 2. 持久化到 config.yaml（强烈推荐，用 bind-mount）
+
+config.yaml 默认在镜像内部，直接 `docker exec` 改会被下次 `docker pull` 抹掉。用 bind-mount 让它跟数据库密码一样持久化：
+
 ```bash
+# a) 第一次启动后从容器里把现成的 config.yaml 拷出来作模板
+docker cp scope-sentry:/opt/ScopeSentry/config.yaml /opt/scopesentry/config.yaml
+
+# b) 编辑 /opt/scopesentry/config.yaml，把第 1 步生成的 node_bootstrap 段贴到根 level
+sudo vi /opt/scopesentry/config.yaml
+
+# c) 改 docker-compose.yml 给 scope-sentry 加 volume
+#    在 scope-sentry 服务的 volumes 下加一行：
+#      - ./config.yaml:/opt/ScopeSentry/config.yaml:ro
+sudo vi /opt/scopesentry/docker-compose.yml
+
+# d) 重建容器使 bind-mount 生效
+cd /opt/scopesentry && docker compose up -d --force-recreate scope-sentry
+```
+
+升级（`update-server.sh`）只换 image，挂卷里的 config.yaml 不会丢。
+
+### 3. 仅当不想 bind-mount：临时 docker exec 改
+
+```bash
+docker exec -it scope-sentry sh
+vi /opt/ScopeSentry/config.yaml   # 贴 node_bootstrap 段
+exit
 docker restart scope-sentry
 ```
 
-> 提示：config.yaml 默认在镜像内部，没挂卷修改会被下次 docker pull 抹掉。要持久化，建议把 `/opt/ScopeSentry/config.yaml` 改成 bind-mount。或者用环境变量覆盖（如果上游 config 包支持 env override，目前没有，所以推荐 bind-mount）。
+下次 `update-server.sh` 拉新镜像会把这次的改动覆盖掉。
 
 ## 防火墙
 
