@@ -2549,7 +2549,13 @@ HELP
   else
     [[ -f "$dockerfile_base" ]] || fail "找不到 $dockerfile_base"
     local current_fp expected_fp
-    current_fp="$(sha256sum "$dockerfile_base" | awk '{print $1}')"
+    if command -v sha256sum >/dev/null 2>&1; then
+      current_fp="$(sha256sum "$dockerfile_base" | awk '{print $1}')"
+    elif command -v shasum >/dev/null 2>&1; then
+      current_fp="$(shasum -a 256 "$dockerfile_base" | awk '{print $1}')"
+    else
+      fail "找不到 sha256sum 或 shasum，无法计算 dockerfile.base 指纹"
+    fi
     expected_fp="$(cat "$fingerprint_file" 2>/dev/null || echo "")"
     if (( force_base == 1 )) || [[ "$current_fp" != "$expected_fp" ]]; then
       if (( force_base == 1 )); then
