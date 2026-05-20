@@ -36,14 +36,17 @@ chmod 600 .local-dev/env/ghcr.env
 ### 2. 推 base 镜像 + scan 镜像
 
 ```bash
-# 一次性：先推 base 镜像（含 ksubdomain/naabu/gogo 等工具）
-./devctl scan publish-base
+# 一键全量发布（推荐，串行推 base/server/scan + git push）
+./devctl publish-all
 
-# 每次改了扫描端 Go 代码：推完整 scan 镜像（FROM base + COPY 新 Go 二进制）
-./devctl scan publish
+# 或拆开手动控制
+./devctl scan publish-base   # 一次性：base 镜像（含 ksubdomain/naabu/gogo 等工具）
+./devctl scan publish        # 每次改了扫描端 Go 代码：完整 scan 镜像（FROM base + COPY 新 Go 二进制）
 ```
 
 首次推完后，到 https://github.com/<owner>?tab=packages 把两个仓库 `scopesentry-scan-base` 和 `scopesentry-scan` 都设为 **public**（私有的话每个节点要配 PAT 才能 pull）。
+
+`publish-all` 会按 `ScopeSentry-Scan/dockerfile.base` 的 sha256 指纹决定是否重推 scan-base：变了就推，没变就跳过。状态文件在 `.local-dev/state/scan-base-fingerprint`。需要强推用 `--force-base`，明确不重推用 `--skip-base`。
 
 ### 3. 配置服务端 config.yaml
 
@@ -121,22 +124,57 @@ docker logs -f scopesentry-scan
 
 回到 UI 节点页 → 你的新节点应该出现在列表里。
 
+## 节点本地管理（升级 / 卸载 / 重启 / 状态）
+
+装完后，节点机的日常运维走 `manage-node.sh`：
+
+```bash
+# 弹管理菜单
+bash <(curl -fsSL https://raw.githubusercontent.com/<owner>/<repo>/main/scripts/manage-node.sh)
+```
+
+菜单项：
+
+| 选项 | 行为 |
+|------|------|
+| `[1] 升级` | 把脚本自身刷新到 `/etc/scopesentry-node/manage-node.sh`，然后 `docker compose pull` + `up -d --force-recreate` |
+| `[2] 卸载` | 二级菜单：`[1] 保留配置`（仅停删容器和镜像）/ `[2] 彻底卸载`（连 `/etc/scopesentry-node/` 和 `/opt/scopesentry-scan/` 一起删） |
+| `[3] 重启` | `docker compose restart` |
+| `[4] 查看状态` | 节点名 / 镜像 tag / 容器状态 / 最近一行日志 / `docker ps` / 最近 20 行容器日志 |
+| `[0] 退出` | 直接退 |
+
+彻底卸载需输入 `DELETE EVERYTHING` 二次确认；保留配置走 `yes/no`。
+
+### 脚本化调用（flag mode）
+
+```bash
+curl -fsSL https://.../manage-node.sh | bash -s -- --upgrade
+... | bash -s -- --restart
+... | bash -s -- --status
+... | bash -s -- --uninstall   # 仍保留二次确认
+```
+
+`manage-node.sh` 只处理**已装节点的管理**。如果节点机还没装过，会提示去服务端 UI 添加节点（拿一次性 token 的 curl 命令）。
+
 ## 日常代码迭代
 
 ```bash
 # === dev 机：改了扫描端代码后 ===
-./devctl scan publish                       # 推新版 scan 镜像到 GHCR
+./devctl publish-all                        # 推所有变化的镜像 + git push（推荐）
+# 或
+./devctl scan publish                       # 只推 scan 镜像到 GHCR
 
 # === 在每个节点上 ===
+# 推荐：弹菜单选 [1] 升级
+bash <(curl -fsSL https://raw.githubusercontent.com/<owner>/<repo>/main/scripts/manage-node.sh)
+
+# 脚本化：flag mode（与 manage-node.sh --upgrade 等价）
 curl -fsSL https://raw.githubusercontent.com/<owner>/<repo>/main/scripts/update-node.sh | bash
-# 或直接
+# 或
 ssh node-hk-01 'curl -fsSL https://raw.githubusercontent.com/<owner>/<repo>/main/scripts/update-node.sh | bash'
 ```
 
-update-node.sh 做的事：
-1. `docker compose pull` 拉新镜像
-2. `docker compose up -d --force-recreate` 重启容器
-3. 打印新容器状态
+升级会先把 `manage-node.sh` 刷新到 `/etc/scopesentry-node/manage-node.sh`（便于离线 ssh 复跑），再 `docker compose pull` + `up -d --force-recreate`。
 
 也可以手工：
 ```bash
@@ -146,12 +184,15 @@ cd /etc/scopesentry-node && docker compose pull && docker compose up -d
 ## 工具或依赖升级（base 镜像变化）
 
 ```bash
-# dev 机
+# dev 机一键
+./devctl publish-all --force-base
+
+# 或拆开
 ./devctl scan publish-base    # 推新 base
 ./devctl scan publish         # 重新 build scan 镜像（FROM 新 base）
 
 # 节点端
-curl -fsSL https://.../scripts/update-node.sh | bash
+bash <(curl -fsSL https://.../scripts/manage-node.sh)   # 选 [1] 升级
 ```
 
 ## 排错
@@ -197,4 +238,4 @@ ssh <host> 'sudo usermod -aG docker $USER && sudo systemctl restart docker'
 - 服务端自身的部署（看 DEPLOY_SERVER.md，也是 GHCR + 一行 curl）
 - 节点上 masscan 需要 `network_mode: host` —— 已经在生成的 compose 里默认开了
 - 节点重启后自动恢复 —— compose 用了 `restart: unless-stopped`，会自动起来
-- 节点版本回滚 —— 在节点上跑 `SCAN_IMAGE_TAG=v2026.05.01 bash update-node.sh` 即可指定旧版本（脚本支持 SCAN_IMAGE_TAG 环境变量 fallback；或者手工 `docker pull <full-tag>` + `docker compose up -d`）
+- 节点版本回滚 —— 改 `/etc/scopesentry-node/node.env` 里 `SCAN_IMAGE` 的 tag，再跑 `manage-node.sh --upgrade`（或弹菜单选 `[1] 升级`）

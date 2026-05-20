@@ -8,9 +8,9 @@
 
 | 角色 | 做什么 | 频率 |
 |------|--------|------|
-| dev 机 | `./devctl server publish` 把镜像推到 GHCR | 每次发新版 |
+| dev 机 | `./devctl publish-all`（或单独 `./devctl server publish`）把镜像推到 GHCR | 每次发新版 |
 | 你 fork 的 GitHub 仓库 | 持有 `scripts/install-server.sh`（顶部硬编码 GHCR_OWNER）| 一次 |
-| 目标 Linux 服务器 | `curl ... install-server.sh \| bash` | 每加一台 |
+| 目标 Linux 服务器 | `curl ... install-server.sh \| bash`（首装 / 之后弹管理菜单） | 每加一台 / 日常运维 |
 
 跟扫描节点的差别：扫描节点 Go 二进制走 SSH rsync 每次都跑；服务端是整个镜像一起换，迭代频率不像扫描端那么高。
 
@@ -60,7 +60,11 @@ https://raw.githubusercontent.com/<your-github-username>/<repo-name>/main/script
 curl -fsSL https://raw.githubusercontent.com/<owner>/<repo>/main/scripts/install-server.sh | bash
 ```
 
-脚本会做的 8 步（每一步打印进度）：
+入口判定：
+- `/opt/scopesentry/.env` **不存在** → 走首装的 8 步（见下）
+- **已存在** → 弹**管理菜单**：升级 / 卸载 / 重启 / 状态 / 退出
+
+脚本首装会做的 8 步（每一步打印进度）：
 
 1. 检查 docker / docker compose v2 / curl
 2. 准备 `/opt/scopesentry/{,data/{mongodb,redis,files,images,uploads}}`
@@ -190,28 +194,74 @@ sudo iptables -A INPUT -p tcp --dport 16379 -j DROP
 # API 8082 一般你希望对自己开放即可，按需收紧
 ```
 
+## 日常运维：管理菜单
+
+服务端装完后，**所有日常运维都走同一条 curl**。它会自动识别已装并弹菜单：
+
+```bash
+bash <(curl -fsSL https://raw.githubusercontent.com/<owner>/<repo>/main/scripts/install-server.sh)
+```
+
+菜单项：
+
+| 选项 | 行为 |
+|------|------|
+| `[1] 升级` | 把脚本自身覆盖到 `/opt/scopesentry/install-server.sh`，然后 `docker compose pull` + `up -d --force-recreate` |
+| `[2] 卸载` | 二级菜单：`[1] 保留数据`（仅停删容器和镜像）/ `[2] 彻底卸载`（连 `/opt/scopesentry/` 一起删） |
+| `[3] 重启` | `docker compose restart` |
+| `[4] 查看状态` | `docker compose ps` + API 健康检查 + 凭据文件位置 |
+| `[0] 退出` | 直接退 |
+
+彻底卸载需输入 `DELETE EVERYTHING` 二次确认；保留数据走 `yes/no`。
+
+### 脚本化调用（flag mode）
+
+跳过菜单，便于远程批量执行：
+
+```bash
+# 升级
+curl -fsSL https://.../install-server.sh | bash -s -- --upgrade
+
+# 重启 / 状态
+... | bash -s -- --restart
+... | bash -s -- --status
+
+# 卸载（仍保留二次确认，flag 不绕过 destructive 操作）
+... | bash -s -- --uninstall
+```
+
+老 `update-server.sh` raw URL 仍可用，等价于 `--upgrade`：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/<owner>/<repo>/main/scripts/update-server.sh | bash
+```
+
 ## 升级到新版本
 
-在 dev 机：
+在 dev 机一键全量推（推 base/server/scan 三个镜像 + git push）：
+```bash
+./devctl publish-all --tag v2026.06.01
+# 不指定 --tag 会用当前时间戳
+```
+
+或者只推服务端镜像：
 ```bash
 ./devctl server publish --tag v2026.06.01
 ```
 
-在服务器（用 update-server.sh，比重新跑 install-server.sh 更快、更安全）：
+在服务器，**首选弹菜单选 `[1] 升级`**；要脚本化就用 flag mode：
 ```bash
-# 拉 :latest
-curl -fsSL https://raw.githubusercontent.com/<owner>/<repo>/main/scripts/update-server.sh | bash
+# 弹菜单
+bash <(curl -fsSL https://raw.githubusercontent.com/<owner>/<repo>/main/scripts/install-server.sh)
 
-# 或指定版本
-SCOPESENTRY_IMAGE_TAG=v2026.06.01 \
-  curl -fsSL https://raw.githubusercontent.com/<owner>/<repo>/main/scripts/update-server.sh | bash
+# 跳菜单直接升级
+curl -fsSL https://raw.githubusercontent.com/<owner>/<repo>/main/scripts/install-server.sh | bash -s -- --upgrade
+
+# 老 wrapper 仍然可用，等价于 --upgrade
+curl -fsSL https://raw.githubusercontent.com/<owner>/<repo>/main/scripts/update-server.sh | bash
 ```
 
-update-server.sh 做的事：
-1. 可选：把 `.env` 里的 SERVER_IMAGE tag 换成你指定的版本
-2. `docker compose pull` 拉新镜像
-3. `docker compose up -d --force-recreate` 重启容器
-4. 打印容器状态
+升级会先把脚本自身刷新到 `/opt/scopesentry/install-server.sh`（便于离线 ssh 复跑），再 `docker compose pull` + `up -d --force-recreate`。
 
 数据库密码不变，admin 账户不变，挂载卷里的 files/images/uploads 都保留。
 
@@ -219,8 +269,11 @@ update-server.sh 做的事：
 
 ```bash
 # 假设之前的稳定版本是 v2026.05.18
-SCOPESENTRY_IMAGE_TAG=v2026.05.18 \
-  curl -fsSL https://raw.githubusercontent.com/<owner>/<repo>/main/scripts/update-server.sh | bash
+# 1. 改 /opt/scopesentry/.env 里 SERVER_IMAGE 的 tag 部分
+sudo sed -i.bak 's|^SERVER_IMAGE=.*|SERVER_IMAGE=ghcr.io/<owner>/scopesentry-server:v2026.05.18|' /opt/scopesentry/.env
+
+# 2. 弹菜单选 [1] 升级（或用 flag 跳菜单）
+curl -fsSL https://raw.githubusercontent.com/<owner>/<repo>/main/scripts/install-server.sh | bash -s -- --upgrade
 ```
 
 如果数据库 schema 改了（罕见），回滚需要先备份。

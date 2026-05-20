@@ -6,10 +6,11 @@
 
 | 文件 | 干嘛 |
 |------|-----|
-| `scripts/install-server.sh` | 给一台干净 Linux 服务器装服务端（Mongo / Redis / scope-sentry 容器） |
-| `scripts/update-server.sh` | 升级服务端镜像 |
-| `scripts/update-node.sh` | 升级扫描节点镜像 |
-| `devctl` | dev 机用的发布工具（`server publish` / `scan publish-base` / `scan publish` 推到 GHCR） |
+| `scripts/install-server.sh` | 一脚本搞定服务端**全生命周期**：未装则首装，已装则弹管理菜单（升级 / 卸载 / 重启 / 状态） |
+| `scripts/manage-node.sh` | 扫描节点**装完之后**的管理菜单（升级 / 卸载 / 重启 / 状态）。初装仍走服务端 UI 发的 curl 命令 |
+| `scripts/update-server.sh` | 向后兼容 wrapper，等价于 `install-server.sh --upgrade` |
+| `scripts/update-node.sh` | 向后兼容 wrapper，等价于 `manage-node.sh --upgrade` |
+| `devctl` | dev 机发布工具（`publish-all` / `server publish` / `scan publish-base` / `scan publish` 推到 GHCR） |
 
 不在仓库里：上游源码 `ScopeSentry/` / `ScopeSentry-Scan/` / `ScopeSentry-UI/`（各自上游 git 仓库，本仓库不持有）。本地开发的中间产物 / 数据库数据 / 凭据 也都在 `.gitignore` 排除。
 
@@ -42,17 +43,58 @@ curl -fsSL https://raw.githubusercontent.com/york-cmd/scopesentry-deploy/main/sc
 
 详见 [DEPLOY_NODE.md](./DEPLOY_NODE.md)。
 
-## 升级
+## 日常运维（升级 / 卸载 / 重启 / 状态）
+
+### 服务端
+
+裸 curl 一行进**管理菜单**（已装时自动检测，弹 5 项菜单）：
 
 ```bash
-# 服务端（在 dev 机推完新镜像之后，到服务器上跑）
-curl -fsSL https://raw.githubusercontent.com/york-cmd/scopesentry-deploy/main/scripts/update-server.sh | bash
-
-# 节点
-curl -fsSL https://raw.githubusercontent.com/york-cmd/scopesentry-deploy/main/scripts/update-node.sh | bash
+bash <(curl -fsSL https://raw.githubusercontent.com/york-cmd/scopesentry-deploy/main/scripts/install-server.sh)
 ```
 
+或者用脚本化 flag 跳菜单：
+
+```bash
+# 升级
+curl -fsSL https://raw.githubusercontent.com/york-cmd/scopesentry-deploy/main/scripts/install-server.sh | bash -s -- --upgrade
+# 重启 / 卸载（卸载仍走二次确认）/ 状态
+... | bash -s -- --restart
+... | bash -s -- --uninstall
+... | bash -s -- --status
+```
+
+老 `update-server.sh` 仍可工作，等价于 `--upgrade`：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/york-cmd/scopesentry-deploy/main/scripts/update-server.sh | bash
+```
+
+### 节点
+
+```bash
+# 管理菜单
+bash <(curl -fsSL https://raw.githubusercontent.com/york-cmd/scopesentry-deploy/main/scripts/manage-node.sh)
+
+# 或 flag mode
+curl -fsSL https://raw.githubusercontent.com/york-cmd/scopesentry-deploy/main/scripts/manage-node.sh | bash -s -- --upgrade
+```
+
+老 `update-node.sh` 仍可工作，等价于 `--upgrade`。
+
 ## dev 机发布新版本镜像
+
+一键全量发布（推荐）：
+
+```bash
+./devctl publish-all              # 串行推 base/server/scan + git push
+./devctl publish-all --tag v2026.05.20    # 自定义 tag
+./devctl publish-all --skip-base  # 明确不重推 base
+./devctl publish-all --force-base # 强制重推 base
+./devctl publish-all --skip-git   # 只推镜像，不动 git
+```
+
+逐项发布（精细控制）：
 
 ```bash
 ./devctl scan publish-base    # 工具基础镜像（罕见，加工具或改 dockerfile.base 时）

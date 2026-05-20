@@ -166,6 +166,12 @@ Scan 迭代（按改动频率从高到低）:
                               凭据从 .local-dev/env/ghcr.env 读取（与 scan publish-base 共用）
                               目标机器配合 scripts/install-server.sh 一键拉起
 
+一键全量发布:
+  publish-all [--tag vX.Y] [--skip-base] [--force-base] [--skip-git]
+                              ★ 串行推 scan-base / server / scan，按 dockerfile.base 指纹智能跳过 base
+                              工作区有未提交改动时一并 git add -A && commit && push origin main
+                              同一次调用所有镜像共用同一时间戳 tag
+
 清理:
   clean                     清理临时文件（logs/pids/cache/tmp），保留 env
   uninstall [--purge]       移除本地开发运行时；--purge 连 mongodb/redis 数据也删
@@ -2483,6 +2489,102 @@ run_server_publish() {
   log "  curl -fsSL https://raw.githubusercontent.com/${GHCR_OWNER}/<repo-name>/main/scripts/install-server.sh | bash"
 }
 
+run_publish_all() {
+  local custom_tag=""
+  local skip_base=0
+  local force_base=0
+  local skip_git=0
+
+  while (( $# > 0 )); do
+    case "$1" in
+      --tag)
+        [[ -n "${2:-}" ]] || fail "--tag 需要参数"
+        custom_tag="$2"
+        shift 2
+        ;;
+      --skip-base)
+        skip_base=1
+        shift
+        ;;
+      --force-base)
+        force_base=1
+        shift
+        ;;
+      --skip-git)
+        skip_git=1
+        shift
+        ;;
+      --help|-h)
+        cat <<HELP
+用法：./devctl publish-all [--tag vX.Y] [--skip-base] [--force-base] [--skip-git]
+
+行为（4 步串行，fail-fast）：
+  1. 检查 ScopeSentry-Scan/dockerfile.base sha256 指纹：与上次成功 publish-base 不同
+     或显式 --force-base 时，重新跑 scan publish-base；否则跳过。
+  2. server publish
+  3. scan publish
+  4. 工作区有未提交改动且未指定 --skip-git 时：
+     git add -A && git commit -m "publish-all <tag>" && git push origin main
+
+所有 publish 共用同一时间戳 tag，默认 v\$(date +%Y.%m.%d-%H%M%S)。
+状态文件：${STATE_DIR}/scan-base-fingerprint
+HELP
+        return 0
+        ;;
+      *)
+        fail "未知参数: $1。用法: ./devctl publish-all [--tag vX.Y] [--skip-base] [--force-base] [--skip-git]"
+        ;;
+    esac
+  done
+
+  local tag="${custom_tag:-$(date +v%Y.%m.%d-%H%M%S)}"
+  log "publish-all 启动（tag=${tag}）"
+
+  mkdir -p "$STATE_DIR"
+  local fingerprint_file="$STATE_DIR/scan-base-fingerprint"
+  local dockerfile_base="$SCAN_DIR/dockerfile.base"
+
+  if (( skip_base == 1 )); then
+    log "步骤 1/4：--skip-base，跳过 scan-base"
+  else
+    [[ -f "$dockerfile_base" ]] || fail "找不到 $dockerfile_base"
+    local current_fp expected_fp
+    current_fp="$(sha256sum "$dockerfile_base" | awk '{print $1}')"
+    expected_fp="$(cat "$fingerprint_file" 2>/dev/null || echo "")"
+    if (( force_base == 1 )) || [[ "$current_fp" != "$expected_fp" ]]; then
+      if (( force_base == 1 )); then
+        log "步骤 1/4：--force-base，强制重新 publish-base"
+      else
+        log "步骤 1/4：scan-base 指纹变化，重新 publish-base"
+      fi
+      run_scan_publish_base --tag "$tag"
+      echo "$current_fp" > "$fingerprint_file"
+    else
+      log "步骤 1/4：scan-base 未变化，跳过 publish-base"
+    fi
+  fi
+
+  log "步骤 2/4：publish server"
+  run_server_publish --tag "$tag"
+
+  log "步骤 3/4：publish scan"
+  run_scan_publish --tag "$tag"
+
+  if (( skip_git == 1 )); then
+    log "步骤 4/4：--skip-git，跳过 git 提交"
+  elif [[ -n "$(cd "$ROOT_DIR" && git status --porcelain 2>/dev/null)" ]]; then
+    log "步骤 4/4：git commit + push 脚本改动"
+    ( cd "$ROOT_DIR" \
+      && git add -A \
+      && git commit -m "publish-all $tag" \
+      && git push origin main )
+  else
+    log "步骤 4/4：工作区干净，无需 git push"
+  fi
+
+  log "publish-all 完成（tag=${tag}）"
+}
+
 run_update() {
   run_install 0 >/dev/null
   start_heartbeat "更新 UI 依赖（pnpm install）"
@@ -2656,6 +2758,9 @@ main() {
           fail "用法: ./devctl server publish [--tag vX.Y] [--no-latest]"
           ;;
       esac
+      ;;
+    publish-all)
+      run_publish_all "$@"
       ;;
     deploy)
       fail "deploy 子命令已移除。请改用 ./devctl scan publish / server publish 推 GHCR，然后到目标机器跑 scripts/install-{node,server}.sh。详见 DEPLOY_SERVER.md / DEPLOY_NODE.md。"
