@@ -2577,15 +2577,27 @@ HELP
   run_scan_publish --tag "$tag"
 
   if (( skip_git == 1 )); then
-    log "步骤 4/4：--skip-git，跳过 git 提交"
-  elif [[ -n "$(cd "$ROOT_DIR" && git status --porcelain 2>/dev/null)" ]]; then
-    log "步骤 4/4：git commit + push 脚本改动"
-    ( cd "$ROOT_DIR" \
-      && git add -A \
-      && git commit -m "publish-all $tag" \
-      && git push origin main )
+    log "步骤 4/4：--skip-git，跳过 git 同步"
   else
-    log "步骤 4/4：工作区干净，无需 git push"
+    local has_dirty=0 ahead_count=0
+    if [[ -n "$(cd "$ROOT_DIR" && git status --porcelain 2>/dev/null)" ]]; then
+      has_dirty=1
+    fi
+    ( cd "$ROOT_DIR" && git fetch origin main 2>/dev/null ) || true
+    ahead_count="$(cd "$ROOT_DIR" && git rev-list --count origin/main..HEAD 2>/dev/null || echo 0)"
+
+    if (( has_dirty == 1 )); then
+      log "步骤 4/4：工作区有改动，git add -A && commit && push origin main"
+      ( cd "$ROOT_DIR" \
+        && git add -A \
+        && git commit -m "publish-all ${tag}" \
+        && git push origin main )
+    elif (( ahead_count > 0 )); then
+      log "步骤 4/4：本地领先 origin/main ${ahead_count} 个 commit，git push origin main"
+      ( cd "$ROOT_DIR" && git push origin main )
+    else
+      log "步骤 4/4：工作区干净且与 origin/main 同步，无需 push"
+    fi
   fi
 
   log "publish-all 完成（tag=${tag}）"
