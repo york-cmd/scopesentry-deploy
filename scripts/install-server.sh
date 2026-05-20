@@ -12,10 +12,11 @@
 #   - /opt/scopesentry/.env 已存在     → 弹出管理菜单（升级 / 卸载 / 重启 / 状态）
 #
 # 非交互参数（脚本化调用 / 兼容老 raw URL wrapper）：
-#   --upgrade     直接执行升级分支
-#   --uninstall   进入卸载流程（仍保留二次确认）
-#   --restart     执行 docker compose restart
-#   --status      打印状态后退出
+#   --upgrade      直接执行升级分支（已装服务器若缺 config.yaml bind-mount 会自动迁移）
+#   --uninstall    进入卸载流程（仍保留二次确认）
+#   --restart      执行 docker compose restart
+#   --status       打印状态后退出
+#   --reconfigure  改公网 IP / 重写 config.yaml 的 node_bootstrap 段（PUBLIC_IP=... 可覆盖）
 #
 # 设计要点：
 #   - 完全自包含：除 docker / docker compose v2 之外不再依赖项目其他文件
@@ -86,11 +87,12 @@ run_install() {
                 "${DATA_DIR}/files" "${DATA_DIR}/images" "${DATA_DIR}/uploads"
   sudo chown -R "$USER" "${INSTALL_DIR}"
 
-  local MONGO_INITDB_ROOT_USERNAME MONGO_INITDB_ROOT_PASSWORD REDIS_PASSWORD
+  local MONGO_INITDB_ROOT_USERNAME MONGO_INITDB_ROOT_PASSWORD REDIS_PASSWORD ENV_PUBLIC_IP
   if [[ -f "$ENV_FILE" ]]; then
-    log "3/8 检测到既有 ${ENV_FILE}，复用其中的密码（不会破坏既有数据库）"
+    log "3/8 检测到既有 ${ENV_FILE}，复用其中的密码 / IP（不会破坏既有数据库）"
     # shellcheck disable=SC1090
     set +u; source "$ENV_FILE"; set -u
+    ENV_PUBLIC_IP="${PUBLIC_IP:-}"
   fi
   MONGO_INITDB_ROOT_USERNAME="${MONGO_INITDB_ROOT_USERNAME:-scopesentry}"
   MONGO_INITDB_ROOT_PASSWORD="${MONGO_INITDB_ROOT_PASSWORD:-$(gen_pw)}"
@@ -98,6 +100,16 @@ run_install() {
   if [[ ! -f "$ENV_FILE" ]]; then
     log "3/8 生成新的 Mongo / Redis 32 字节随机密码"
   fi
+
+  # 探测公网 IP（env 优先 > 公网回拨 > LAN ip）
+  local detected_ip
+  if ! detected_ip="$(detect_public_ip)" || [[ -z "$detected_ip" ]]; then
+    err "无法自动探测公网 IP（curl ifconfig.me 等都失败）"
+    err "请用：PUBLIC_IP=x.x.x.x curl -fsSL ${SELF_RAW_URL} | bash"
+    exit 1
+  fi
+  PUBLIC_IP="${PUBLIC_IP:-${ENV_PUBLIC_IP:-$detected_ip}}"
+  log "公网 IP：${PUBLIC_IP}（节点 mongodb/redis 反连地址，env PUBLIC_IP=... 可覆盖）"
 
   log "4/8 写 ${ENV_FILE}"
   umask 077
@@ -110,11 +122,13 @@ MONGO_PORT_EXT=${MONGO_PORT_EXT}
 REDIS_PORT_EXT=${REDIS_PORT_EXT}
 API_PORT=${API_PORT}
 TIMEZONE=${TIMEZONE}
+PUBLIC_IP=${PUBLIC_IP}
 EOF
   umask 022
 
-  log "5/8 写 ${COMPOSE_FILE}"
+  log "5/8 写 ${COMPOSE_FILE} 和 config.yaml（node_bootstrap）"
   write_compose_yml
+  write_node_bootstrap_config 0
 
   log "6/8 docker pull ${SERVER_IMAGE}"
   docker pull "$SERVER_IMAGE"
@@ -179,9 +193,12 @@ TIP
 
 下一步：
   1. 进 UI 改首次密码（系统设置 → 修改密码）
-  2. 把 .env 里的 Mongo/Redis 密码补到服务端 config.yaml 的 node_bootstrap section
-     （用于扫描节点 enrollment，详见 DEPLOY_NODE.md）
-  3. UI 节点页 → "添加节点" 即可拉起远端扫描节点
+  2. UI 节点页 → "添加节点" 即可拉起远端扫描节点
+     （node_bootstrap 配置已自动写入 ${INSTALL_DIR}/config.yaml）
+
+如果公网 IP 变了，跑：
+  bash <(curl -fsSL ${SELF_RAW_URL}) → 选 [5] 修改公网 IP
+  或非交互：curl ... install-server.sh | PUBLIC_IP=新IP bash -s -- --reconfigure
 
 防火墙记得只对扫描节点 IP 放行：
   - Mongo 端口：${MONGO_PORT_EXT}
@@ -201,6 +218,86 @@ gen_pw() {
   else
     head -c 48 /dev/urandom | base64 | tr -d '/+=\n' | head -c 32
   fi
+}
+
+detect_public_ip() {
+  # 优先级：env PUBLIC_IP > 公网回拨 > hostname -I 第一个 IP
+  if [[ -n "${PUBLIC_IP:-}" ]]; then
+    printf '%s' "$PUBLIC_IP"
+    return 0
+  fi
+  local url ip
+  for url in https://ifconfig.me https://api.ipify.org https://icanhazip.com; do
+    ip="$(curl -fsS --max-time 5 "$url" 2>/dev/null | tr -d '[:space:]')"
+    if [[ "$ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+      printf '%s' "$ip"
+      return 0
+    fi
+  done
+  ip="$(hostname -I 2>/dev/null | awk '{print $1}')"
+  if [[ -n "$ip" ]]; then
+    printf '%s' "$ip"
+    return 0
+  fi
+  return 1
+}
+
+write_node_bootstrap_config() {
+  # $1 = 1 表示强制重写已有 node_bootstrap 段，0 表示已存在则保留
+  local force="${1:-0}"
+
+  [[ -f "$ENV_FILE" ]] || { err "${ENV_FILE} 不存在，无法写 node_bootstrap"; return 1; }
+  # shellcheck disable=SC1090
+  set +u; source "$ENV_FILE"; set -u
+
+  local public_ip ghcr_owner scan_image
+  public_ip="${PUBLIC_IP:-}"
+  if [[ -z "$public_ip" ]]; then
+    err "PUBLIC_IP 为空，无法写 node_bootstrap。先用 PUBLIC_IP=x.x.x.x 跑 --reconfigure"
+    return 1
+  fi
+  ghcr_owner="$(printf '%s' "$SERVER_IMAGE" | sed -E 's|^ghcr\.io/([^/]+)/.*|\1|')"
+  scan_image="${SCAN_IMAGE_OVERRIDE:-ghcr.io/${ghcr_owner}/scopesentry-scan:latest}"
+
+  local config_file="${INSTALL_DIR}/config.yaml"
+  if [[ -f "$config_file" ]] && grep -q '^node_bootstrap:' "$config_file"; then
+    if (( force == 0 )); then
+      log "config.yaml 已含 node_bootstrap 段，跳过（用 --reconfigure 强制重写）"
+      return 0
+    fi
+    log "重写 config.yaml 的 node_bootstrap 段"
+    # 删掉旧 node_bootstrap 段（从 ^node_bootstrap: 开始到下一个顶层 key 或 EOF）
+    local tmp
+    tmp="$(mktemp)"
+    awk '
+      /^node_bootstrap:/ { skip=1; next }
+      skip && /^[^[:space:]#]/ { skip=0 }
+      !skip { print }
+    ' "$config_file" > "$tmp"
+    sudo mv "$tmp" "$config_file"
+  else
+    log "写入 ${config_file} 的 node_bootstrap 段"
+  fi
+
+  # append node_bootstrap 段到末尾
+  sudo tee -a "$config_file" >/dev/null <<EOF
+
+node_bootstrap:
+  scan_image: "${scan_image}"
+  public_server_url: "http://${public_ip}:${API_PORT}"
+  timezone: "${TIMEZONE}"
+  mongodb:
+    host: "${public_ip}"
+    port: ${MONGO_PORT_EXT}
+    database: "ScopeSentry"
+    username: "${MONGO_INITDB_ROOT_USERNAME}"
+    password: "${MONGO_INITDB_ROOT_PASSWORD}"
+  redis:
+    host: "${public_ip}"
+    port: ${REDIS_PORT_EXT}
+    password: "${REDIS_PASSWORD}"
+EOF
+  sudo chmod 600 "$config_file"
 }
 
 write_compose_yml() {
@@ -274,6 +371,7 @@ services:
       mongodb:
         condition: service_healthy
     volumes:
+      - ./config.yaml:/opt/ScopeSentry/config.yaml
       - ./data/files:/opt/ScopeSentry/files
       - ./data/images:/opt/ScopeSentry/images
       - ./data/uploads:/opt/ScopeSentry/uploads
@@ -323,14 +421,114 @@ self_update() {
   fi
 }
 
+migrate_to_bind_mount() {
+  # 旧部署没有 /opt/scopesentry/config.yaml + docker-compose.yml 缺 config.yaml bind-mount。
+  # 一次性迁移：补 PUBLIC_IP 到 .env、重写 compose、写 config.yaml node_bootstrap 段。
+  local need_migrate=0
+  if [[ ! -f "${INSTALL_DIR}/config.yaml" ]]; then
+    need_migrate=1
+  elif ! grep -q 'config.yaml:/opt/ScopeSentry/config.yaml' "$COMPOSE_FILE" 2>/dev/null; then
+    need_migrate=1
+  fi
+  (( need_migrate == 1 )) || return 0
+
+  log "迁移到 config.yaml bind-mount 模式（首次升级会重建 scope-sentry 容器）"
+
+  # 补 PUBLIC_IP 到 .env（如果还没）
+  # shellcheck disable=SC1090
+  set +u; source "$ENV_FILE"; set -u
+  local existing_public_ip="${PUBLIC_IP:-}"
+  if [[ -z "$existing_public_ip" ]]; then
+    local detected_ip
+    if ! detected_ip="$(detect_public_ip)" || [[ -z "$detected_ip" ]]; then
+      err "无法自动探测公网 IP。请用 PUBLIC_IP=x.x.x.x curl ... install-server.sh | bash -s -- --upgrade 重试"
+      exit 1
+    fi
+    PUBLIC_IP="${PUBLIC_IP:-$detected_ip}"
+    log "补写 PUBLIC_IP=${PUBLIC_IP} 到 ${ENV_FILE}"
+    if grep -q '^PUBLIC_IP=' "$ENV_FILE"; then
+      sed -i.bak "s|^PUBLIC_IP=.*|PUBLIC_IP=${PUBLIC_IP}|" "$ENV_FILE"
+    else
+      printf 'PUBLIC_IP=%s\n' "$PUBLIC_IP" >> "$ENV_FILE"
+    fi
+    rm -f "${ENV_FILE}.bak"
+  fi
+
+  log "重写 ${COMPOSE_FILE}（加 config.yaml bind-mount）"
+  write_compose_yml
+
+  write_node_bootstrap_config 0
+}
+
 do_upgrade() {
   ensure_docker_stack
   self_update
+  migrate_to_bind_mount
   log "拉取最新镜像"
   ( cd "${INSTALL_DIR}" && docker compose --env-file .env pull )
   log "重建容器（force-recreate）"
   ( cd "${INSTALL_DIR}" && docker compose --env-file .env up -d --force-recreate )
   log "升级完成。看日志：docker logs -f scope-sentry"
+}
+
+do_reconfigure() {
+  ensure_docker_stack
+  [[ -f "$ENV_FILE" ]] || { err "${ENV_FILE} 不存在，请先装服务端"; return 1; }
+
+  # shellcheck disable=SC1090
+  set +u; source "$ENV_FILE"; set -u
+  local current_ip="${PUBLIC_IP:-(未设置)}"
+  echo
+  printf '当前公网 IP：\033[36m%s\033[0m\n' "$current_ip"
+  echo "新 IP（直接回车走自动探测；env 传 PUBLIC_IP=... 也可以）："
+  local new_ip
+  read -r -p "> " new_ip </dev/tty || true
+
+  if [[ -z "$new_ip" ]]; then
+    if ! new_ip="$(detect_public_ip)" || [[ -z "$new_ip" ]]; then
+      err "未输入且自动探测失败，请用 PUBLIC_IP=x.x.x.x ... --reconfigure 重试"
+      return 1
+    fi
+    log "自动探测到：${new_ip}"
+  fi
+
+  if [[ "$new_ip" == "$current_ip" ]]; then
+    log "IP 未变化，仅重写 config.yaml node_bootstrap 段以确保一致"
+  fi
+
+  if grep -q '^PUBLIC_IP=' "$ENV_FILE"; then
+    sed -i.bak "s|^PUBLIC_IP=.*|PUBLIC_IP=${new_ip}|" "$ENV_FILE"
+  else
+    printf 'PUBLIC_IP=%s\n' "$new_ip" >> "$ENV_FILE"
+  fi
+  rm -f "${ENV_FILE}.bak"
+  log "已更新 ${ENV_FILE} 的 PUBLIC_IP=${new_ip}"
+
+  PUBLIC_IP="$new_ip" write_node_bootstrap_config 1
+
+  # 确保 compose 含 bind-mount
+  if ! grep -q 'config.yaml:/opt/ScopeSentry/config.yaml' "$COMPOSE_FILE" 2>/dev/null; then
+    log "重写 ${COMPOSE_FILE}（加 config.yaml bind-mount）"
+    write_compose_yml
+    log "compose 文件变了，强制重建容器"
+    ( cd "${INSTALL_DIR}" && docker compose --env-file .env up -d --force-recreate scope-sentry )
+  else
+    log "重启 scope-sentry 容器使新配置生效"
+    ( cd "${INSTALL_DIR}" && docker compose --env-file .env restart scope-sentry )
+  fi
+
+  cat <<TIP
+
+✓ 公网 IP 已更新为 ${new_ip}
+  config.yaml 的 public_server_url / mongodb.host / redis.host 都已重写。
+
+如果有节点已经部署，节点端的 server URL 也需要更新：
+  在每台节点机上跑：
+    bash <(curl -fsSL https://raw.githubusercontent.com/${DEPLOY_REPO_OWNER}/${DEPLOY_REPO_NAME}/${DEPLOY_REPO_BRANCH}/scripts/manage-node.sh)
+  选 [2] 卸载 → 然后回服务端 UI 重新生成 install-node 命令重装。
+  （manage-node.sh --upgrade 只换镜像，不会换 server URL）
+
+TIP
 }
 
 do_restart() {
@@ -458,6 +656,7 @@ ScopeSentry 服务端已安装在 ${INSTALL_DIR}
   [2] 卸载
   [3] 重启
   [4] 查看状态
+  [5] 修改公网 IP / 重写 node_bootstrap
   [0] 退出
 MENU
     local choice
@@ -467,6 +666,7 @@ MENU
       2) do_uninstall ;;
       3) do_restart ;;
       4) do_status ;;
+      5) do_reconfigure ;;
       0) log "退出"; return 0 ;;
       *) warn "非法选项：$choice" ;;
     esac
@@ -479,12 +679,13 @@ MENU
 ACTION="${SCOPESENTRY_ACTION:-}"
 while (( $# > 0 )); do
   case "$1" in
-    --upgrade)   ACTION="upgrade"; shift ;;
-    --uninstall) ACTION="uninstall"; shift ;;
-    --restart)   ACTION="restart"; shift ;;
-    --status)    ACTION="status"; shift ;;
+    --upgrade)     ACTION="upgrade"; shift ;;
+    --uninstall)   ACTION="uninstall"; shift ;;
+    --restart)     ACTION="restart"; shift ;;
+    --status)      ACTION="status"; shift ;;
+    --reconfigure) ACTION="reconfigure"; shift ;;
     --help|-h)
-      sed -n '2,20p' "$0" 2>/dev/null || true
+      sed -n '2,22p' "$0" 2>/dev/null || true
       exit 0
       ;;
     *) err "未知参数: $1"; exit 2 ;;
@@ -498,10 +699,11 @@ if [[ -n "$ACTION" ]]; then
   fi
   ensure_docker_stack
   case "$ACTION" in
-    upgrade)   do_upgrade ;;
-    uninstall) do_uninstall ;;
-    restart)   do_restart ;;
-    status)    do_status ;;
+    upgrade)     do_upgrade ;;
+    uninstall)   do_uninstall ;;
+    restart)     do_restart ;;
+    status)      do_status ;;
+    reconfigure) do_reconfigure ;;
   esac
   exit 0
 fi

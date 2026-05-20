@@ -50,6 +50,8 @@ chmod 600 .local-dev/env/ghcr.env
 
 ### 3. 配置服务端 config.yaml
 
+> **如果服务端是 `install-server.sh` 装的，这一节已经自动完成**：首装 / `--upgrade` 时会自动写 `/opt/scopesentry/config.yaml` 的 `node_bootstrap` 段，公网 IP 自动探测（env 传 `PUBLIC_IP=...` 可覆盖），后续改 IP 走管理菜单 `[5]` 或 `--reconfigure`。下面的步骤仅在自部署 ScopeSentry 服务端时需要。
+
 在 ScopeSentry 服务端的 `config.yaml` 里加：
 
 ```yaml

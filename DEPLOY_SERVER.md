@@ -104,6 +104,8 @@ SCOPESENTRY_IMAGE_TAG=v2026.05.18-101530 API_PORT=8443 \
 
 ## 给服务端 config 补 node_bootstrap section
 
+> **自动化：`install-server.sh` 首装 / `--upgrade` 时已自动写好。** 公网 IP 自动探测，env 传 `PUBLIC_IP=...` 可覆盖。后续改 IP 走管理菜单 `[5] 修改公网 IP`，或 `--reconfigure` flag。下文命令仅在自部署 ScopeSentry 服务端、或想手动核对/调试时参考。
+
 部署完后立刻做这一步，否则 UI 上"添加节点"会因 `node_bootstrap` 未配置而报错。
 
 ### 1. 在服务器上一行命令生成 yaml 片段
@@ -206,10 +208,11 @@ bash <(curl -fsSL https://raw.githubusercontent.com/<owner>/<repo>/main/scripts/
 
 | 选项 | 行为 |
 |------|------|
-| `[1] 升级` | 把脚本自身覆盖到 `/opt/scopesentry/install-server.sh`，然后 `docker compose pull` + `up -d --force-recreate` |
+| `[1] 升级` | 把脚本自身覆盖到 `/opt/scopesentry/install-server.sh`，然后 `docker compose pull` + `up -d --force-recreate`。**老部署首次升级会自动迁移到 config.yaml bind-mount 模式**（补 PUBLIC_IP / 重写 compose / 写 node_bootstrap） |
 | `[2] 卸载` | 二级菜单：`[1] 保留数据`（仅停删容器和镜像）/ `[2] 彻底卸载`（连 `/opt/scopesentry/` 一起删） |
 | `[3] 重启` | `docker compose restart` |
 | `[4] 查看状态` | `docker compose ps` + API 健康检查 + 凭据文件位置 |
+| `[5] 修改公网 IP` | 改 `.env` 的 PUBLIC_IP + 重写 `config.yaml` 的 `node_bootstrap`（`public_server_url` / `mongodb.host` / `redis.host`），自动 restart 容器 |
 | `[0] 退出` | 直接退 |
 
 彻底卸载需输入 `DELETE EVERYTHING` 二次确认；保留数据走 `yes/no`。
@@ -219,7 +222,7 @@ bash <(curl -fsSL https://raw.githubusercontent.com/<owner>/<repo>/main/scripts/
 跳过菜单，便于远程批量执行：
 
 ```bash
-# 升级
+# 升级（旧部署首次跑会自动迁移到 config.yaml bind-mount）
 curl -fsSL https://.../install-server.sh | bash -s -- --upgrade
 
 # 重启 / 状态
@@ -228,6 +231,9 @@ curl -fsSL https://.../install-server.sh | bash -s -- --upgrade
 
 # 卸载（仍保留二次确认，flag 不绕过 destructive 操作）
 ... | bash -s -- --uninstall
+
+# 改公网 IP / 重写 node_bootstrap（自动探测，PUBLIC_IP=... 可覆盖）
+PUBLIC_IP=1.2.3.4 curl -fsSL https://.../install-server.sh | bash -s -- --reconfigure
 ```
 
 老 `update-server.sh` raw URL 仍可用，等价于 `--upgrade`：
@@ -262,6 +268,8 @@ curl -fsSL https://raw.githubusercontent.com/<owner>/<repo>/main/scripts/update-
 ```
 
 升级会先把脚本自身刷新到 `/opt/scopesentry/install-server.sh`（便于离线 ssh 复跑），再 `docker compose pull` + `up -d --force-recreate`。
+
+**老部署首次升级会自动迁移**：检测到 `/opt/scopesentry/config.yaml` 缺失或 `docker-compose.yml` 缺 `config.yaml` bind-mount 行时，会自动探测 PUBLIC_IP（env 可覆盖）→ 补 `.env` 的 `PUBLIC_IP=` → 重写 `docker-compose.yml`（加 `config.yaml` bind-mount）→ 写 `config.yaml` 的 `node_bootstrap` 段。一次性，幂等。
 
 数据库密码不变，admin 账户不变，挂载卷里的 files/images/uploads 都保留。
 

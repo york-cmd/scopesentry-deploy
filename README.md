@@ -28,11 +28,15 @@
 curl -fsSL https://raw.githubusercontent.com/york-cmd/scopesentry-deploy/main/scripts/install-server.sh | bash
 ```
 
-完成后命令行会输出 `访问地址 / 登录用户 / 登录密码`，凭据持久化在 `/opt/scopesentry/PASSWORD` 和 `/opt/scopesentry/.env`。
+完成后命令行会输出 `访问地址 / 登录用户 / 登录密码`，凭据持久化在 `/opt/scopesentry/PASSWORD` 和 `/opt/scopesentry/.env`。`config.yaml` 的 `node_bootstrap` 段会自动写好（公网 IP 自动探测，env 传 `PUBLIC_IP=...` 可覆盖），UI 直接能加节点。
 
-然后**必须**做这两步，否则 UI"添加节点"会报错或被全网爬：
-1. 按 [DEPLOY_SERVER.md 的 "给服务端 config 补 node_bootstrap section"](./DEPLOY_SERVER.md#给服务端-config-补-node_bootstrap-section) 把节点拉起参数补到 `config.yaml`
-2. 按 [DEPLOY_SERVER.md 的 "防火墙"](./DEPLOY_SERVER.md#防火墙) 把 Mongo（37017）/ Redis（16379）端口收紧到节点 IP
+然后**必须**收紧防火墙：把 Mongo（37017）/ Redis（16379）端口只对扫描节点 IP 放行，详见 [DEPLOY_SERVER.md 的 "防火墙"](./DEPLOY_SERVER.md#防火墙)。
+
+公网 IP 后续变了，运行：
+```bash
+bash <(curl -fsSL https://raw.githubusercontent.com/york-cmd/scopesentry-deploy/main/scripts/install-server.sh)
+# 选 [5] 修改公网 IP / 重写 node_bootstrap
+```
 
 ## 加扫描节点（每加一台 5 分钟）
 
