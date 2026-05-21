@@ -78,7 +78,7 @@ curl -fsSL https://raw.githubusercontent.com/<owner>/<repo>/main/scripts/install
 输出示例：
 ```
 ✓ 部署完成
-访问地址：http://1.2.3.4:8082
+访问地址：http://1.2.3.4:8080
 登录用户：ScopeSentry
 登录密码：xxxxxxxx
 凭据已持久化到：/opt/scopesentry/PASSWORD, .env, PLUGINKEY
@@ -93,7 +93,7 @@ curl -fsSL https://raw.githubusercontent.com/<owner>/<repo>/main/scripts/install
 | `SCOPESENTRY_INSTALL_DIR` | `/opt/scopesentry` | 装到别处（比如非 root 用户的 home 下） |
 | `MONGO_PORT_EXT` | `37017` | 主机侧 Mongo 端口（容器内永远是 27017） |
 | `REDIS_PORT_EXT` | `16379` | 主机侧 Redis 端口 |
-| `API_PORT` | `8082` | 主机侧 API 端口 |
+| `API_PORT` | `8080` | 主机侧 API 端口 |
 | `TIMEZONE` | `Asia/Shanghai` | 容器内时区 |
 
 例：固定版本 + 自定义端口
@@ -193,7 +193,7 @@ sudo iptables -A INPUT -p tcp --dport 37017 -j DROP
 sudo iptables -A INPUT -p tcp --dport 16379 -s <node-ip-1> -j ACCEPT
 sudo iptables -A INPUT -p tcp --dport 16379 -s <node-ip-2> -j ACCEPT
 sudo iptables -A INPUT -p tcp --dport 16379 -j DROP
-# API 8082 一般你希望对自己开放即可，按需收紧
+# API 8080 一般你希望对自己开放即可，按需收紧
 ```
 
 ## 日常运维：管理菜单

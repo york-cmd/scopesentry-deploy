@@ -32,7 +32,7 @@ GOCACHE="$GO_CACHE_DIR" GOMODCACHE="$GO_MOD_CACHE_DIR" \
   go build -o "$RUNTIME_DIR/scopesentry-scan-dev" ./cmd/ScopeSentry/main.go
 
 exec env \
-  NodeName="${NodeName:-local-dev-node}" \
+  NodeName="${NODE_NAME:-${NodeName:-local-dev-node}}" \
   TimeZoneName="${TimeZoneName:-Asia/Shanghai}" \
   MONGODB_IP="${MONGODB_IP:-127.0.0.1}" \
   MONGODB_PORT="${MONGODB_PORT:-27017}" \

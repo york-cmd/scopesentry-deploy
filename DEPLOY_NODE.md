@@ -57,7 +57,7 @@ chmod 600 .local-dev/env/ghcr.env
 ```yaml
 node_bootstrap:
   scan_image: "ghcr.io/<owner>/scopesentry-scan:latest"
-  public_server_url: "http://<server-public-ip>:8082"
+  public_server_url: "http://<server-public-ip>:8080"
   timezone: "Asia/Shanghai"
   mongodb:
     host: "<server-public-ip>"
@@ -102,13 +102,13 @@ sudo iptables -A INPUT -p tcp --dport 16379 -j DROP
 curl -fsS -X POST -H 'Content-Type: application/json' \
   -H "Authorization: Bearer <your-jwt-token>" \
   --data '{"node_name":"node-hk-01"}' \
-  http://<server-public-ip>:8082/api/node/install-token
+  http://<server-public-ip>:8080/api/node/install-token
 ```
 
 ### C. 在目标 Linux 节点上跑
 
 ```bash
-curl -fsSL "http://<server>:8082/api/node/install-script?token=XXXX" | bash
+curl -fsSL "http://<server>:8080/api/node/install-script?token=XXXX" | bash
 ```
 
 脚本背后做了 6 步（每步都会打印进度）：
@@ -204,7 +204,7 @@ bash <(curl -fsSL https://.../scripts/manage-node.sh)   # 选 [1] 升级
 服务端 `node_bootstrap` section 没填全。看服务端日志或调试：
 ```bash
 curl -fsS -X POST -H 'Content-Type: application/json' \
-  --data '{"token":"XXX"}' http://<server>:8082/api/node/bootstrap
+  --data '{"token":"XXX"}' http://<server>:8080/api/node/bootstrap
 # 看 message 字段，会列出 missing 的字段名
 ```
 

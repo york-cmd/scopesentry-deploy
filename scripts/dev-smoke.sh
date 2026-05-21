@@ -2,6 +2,12 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+if [[ "${1:-}" == "--stream-portscan" ]]; then
+  shift
+  exec "$ROOT_DIR/scripts/tests/portscan_stream_chunk_smoke.sh" "$@"
+fi
+
 LOCAL_DEV_DIR="$ROOT_DIR/.local-dev"
 SERVER_RUNTIME_DIR="$LOCAL_DEV_DIR/runtime/server"
 SCAN_RUNTIME_DIR="$LOCAL_DEV_DIR/runtime/scan-host"
@@ -13,7 +19,7 @@ NODE_LOG_SNAPSHOT="$LOG_DIR/dev-smoke-node.log"
 SERVER_PID_FILE="$PID_DIR/dev-server.pid"
 SCAN_PID_FILE="$PID_DIR/dev-scan.pid"
 
-BACKEND_URL="${BACKEND_URL:-http://127.0.0.1:8082}"
+BACKEND_URL="${BACKEND_URL:-http://127.0.0.1:8080}"
 BACKEND_HEALTH_URL="${BACKEND_HEALTH_URL:-$BACKEND_URL}"
 LOGIN_URL="$BACKEND_URL/api/user/login"
 NODE_URL="$BACKEND_URL/api/node"

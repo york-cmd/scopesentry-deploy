@@ -512,7 +512,7 @@ DEVCTL_PROGRESS_INTERVAL=1 ./devctl up
 
 主服务默认端口：
 
-- `http://127.0.0.1:8082`
+- `http://127.0.0.1:8080`
 
 ## 启动顺序
 
@@ -572,9 +572,9 @@ DEVCTL_PROGRESS_INTERVAL=1 ./devctl up
 
 前端会把 `/api` 和 `/images` 代理到：
 
-- `http://127.0.0.1:8082`
+- `http://127.0.0.1:8080`
 
-如果 `4000` 已被占用，Vite 会自动递增到 `4001`、`4002` 等端口。
+如果 `4000` 已被占用，先释放该端口再启动本地 UI，避免访问到错误的前端实例。
 
 ### 4. 需要时启动扫描节点
 
@@ -783,7 +783,7 @@ GO_PROXY_URL=https://goproxy.cn,direct ./scripts/dev-scan-docker-build.sh restar
 再访问：
 
 ```text
-http://127.0.0.1:8082
+http://127.0.0.1:8080
 ```
 
 这时看到的是主服务二进制里内嵌的前端页面，不再是 Vite 开发服务器。

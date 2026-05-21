@@ -21,7 +21,7 @@
 # 设计要点：
 #   - 完全自包含：除 docker / docker compose v2 之外不再依赖项目其他文件
 #   - 可重入：再次执行不会破坏既有数据库（密码从 /opt/scopesentry/.env 读回复用）
-#   - 端口默认 Mongo 37017 / Redis 16379 / API 8082，避开公网爬虫常扫的默认值
+#   - 端口默认 Mongo 37017 / Redis 16379 / API 8080，避开公网爬虫常扫的默认值
 #   - 升级分支会先把自身 curl 覆盖到 /opt/scopesentry/install-server.sh，便于离线 ssh 复跑
 set -euo pipefail
 
@@ -42,7 +42,7 @@ IMAGE_TAG="${SCOPESENTRY_IMAGE_TAG:-$DEFAULT_IMAGE_TAG}"
 SERVER_IMAGE="ghcr.io/${GHCR_OWNER}/${SERVER_REPO_NAME}:${IMAGE_TAG}"
 MONGO_PORT_EXT="${MONGO_PORT_EXT:-37017}"
 REDIS_PORT_EXT="${REDIS_PORT_EXT:-16379}"
-API_PORT="${API_PORT:-8082}"
+API_PORT="${API_PORT:-8080}"
 TIMEZONE="${TIMEZONE:-Asia/Shanghai}"
 
 SELF_RAW_URL="https://raw.githubusercontent.com/${DEPLOY_REPO_OWNER}/${DEPLOY_REPO_NAME}/${DEPLOY_REPO_BRANCH}/scripts/install-server.sh"
@@ -349,7 +349,7 @@ services:
     container_name: scope-sentry
     restart: always
     ports:
-      - "${API_PORT}:8082"
+      - "${API_PORT}:8080"
     environment:
       TIMEZONE: ${TIMEZONE}
       MONGODB_IP: scopesentry-mongodb
@@ -361,7 +361,7 @@ services:
       REDIS_PORT: 6379
       REDIS_PASSWORD: ${REDIS_PASSWORD}
     healthcheck:
-      test: ["CMD-SHELL", "curl -f http://127.0.0.1:8082 || exit 1"]
+      test: ["CMD-SHELL", "curl -f http://127.0.0.1:8080 || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 10
@@ -546,7 +546,7 @@ do_status() {
   echo
   printf '\033[36m=== API 健康检查 ===\033[0m\n'
   local api_port
-  api_port="$(awk -F= '/^API_PORT=/ {print $2}' "$ENV_FILE" 2>/dev/null || echo 8082)"
+  api_port="$(awk -F= '/^API_PORT=/ {print $2}' "$ENV_FILE" 2>/dev/null || echo 8080)"
   if curl -fsS "http://127.0.0.1:${api_port}/api/health" 2>/dev/null; then
     echo
   else

@@ -400,7 +400,7 @@ cat >"$output" <<'INNER'
 set -euo pipefail
 
 state_dir="${DEVCTL_TEST_STATE_DIR:?missing DEVCTL_TEST_STATE_DIR}"
-ready_file="$state_dir/http-8082.ready"
+ready_file="$state_dir/http-8080.ready"
 runtime_dir="$(cd "$(dirname "$0")" && pwd)"
 entry_asset="__ENTRY_ASSET__"
 
@@ -519,7 +519,7 @@ fi
 
 if [[ "$fsS" == "1" ]]; then
   case "$url" in
-    *127.0.0.1:8082/)
+    *127.0.0.1:8080/)
       if [[ -f "$state_dir/deploy.remote.root.fail" ]]; then
         exit 22
       fi
@@ -539,7 +539,7 @@ if [[ "$fsS" == "1" ]]; then
 INNER
       exit 0
       ;;
-    *127.0.0.1:8082/assets/*)
+    *127.0.0.1:8080/assets/*)
       [[ -f "$state_dir/deploy.remote.asset.fail" ]] && exit 22
       printf 'console.log("ok");\n'
       exit 0
@@ -548,8 +548,8 @@ INNER
 fi
 
 case "$url" in
-  *127.0.0.1:8082*)
-    [[ -f "$state_dir/http-8082.ready" ]] && exit 0
+  *127.0.0.1:8080*)
+    [[ -f "$state_dir/http-8080.ready" ]] && exit 0
     exit 22
     ;;
   *127.0.0.1:*)
@@ -629,7 +629,7 @@ if [[ "$cmd" == *"printf '%s' "* && "$cmd" == *"/ScopeSentry/dist/ScopeSentry_li
   fi
 fi
 
-if [[ "$cmd" == *"curl -fsS http://127.0.0.1:8082/"* ]]; then
+if [[ "$cmd" == *"curl -fsS http://127.0.0.1:8080/"* ]]; then
   if consume_fail_count "$state_dir/deploy.remote.root.fail.count"; then
     exit 56
   fi
@@ -738,7 +738,7 @@ test_install_generates_env_and_manifest() {
   assert_file "$db_override_file"
   assert_contains "MONGO_INITDB_ROOT_USERNAME=admin" "$env_file"
   assert_contains "SCAN_IMAGE=scopesentry-scan-dev:local" "$devctl_env_file"
-  assert_contains "\"api_url\": \"http://127.0.0.1:8082\"" "$manifest_file"
+  assert_contains "\"api_url\": \"http://127.0.0.1:8080\"" "$manifest_file"
   assert_contains "\"ui_url\": \"http://127.0.0.1:4000\"" "$manifest_file"
   assert_contains "shutdown-on-sigterm" "$db_override_file"
   assert_contains "nosave" "$db_override_file"
@@ -758,7 +758,7 @@ test_install_migrates_official_scan_default_to_local() {
   devctl_env_file="$devctl_env_dir/devctl.env"
   mkdir -p "$devctl_env_dir"
   cat >"$devctl_env_file" <<'EOF'
-API_URL=http://127.0.0.1:8082
+API_URL=http://127.0.0.1:8080
 UI_URL=http://127.0.0.1:4000
 NODE_NAME=local-dev-node-docker
 SCAN_IMAGE=autumn27/scopesentry-scan:latest
@@ -1008,7 +1008,7 @@ EOF
 
   output="$(run_devctl "$tmp_root" "$stub_bin" "$state_dir" up 2>&1)"
   second_pid="$(cat "$tmp_root/.local-dev/pids/dev-server.pid")"
-  root_html="$(DEVCTL_TEST_STATE_DIR="$state_dir" "$stub_bin/curl" -fsS http://127.0.0.1:8082/)"
+  root_html="$(DEVCTL_TEST_STATE_DIR="$state_dir" "$stub_bin/curl" -fsS http://127.0.0.1:8080/)"
 
   [[ "$first_pid" != "$second_pid" ]] || fail "expected server pid to change after embedded ui update"
   [[ "$(grep -c 'scope-sentry-dev .*./cmd/main$' "$state_dir/go.build.calls")" == "2" ]] || fail "expected backend server binary to be rebuilt twice"
@@ -1257,7 +1257,7 @@ EOF
 
   [[ "$output" == *"验证远端 HTTP"* ]] || fail "expected remote HTTP verify stage output"
   assert_file "$state_dir/ssh.calls"
-  assert_contains "curl -fsS http://127.0.0.1:8082/" "$state_dir/ssh.calls"
+  assert_contains "curl -fsS http://127.0.0.1:8080/" "$state_dir/ssh.calls"
 }
 
 test_deploy_reload_builds_server_package_instead_of_single_file() {
