@@ -6,7 +6,7 @@
 
 | 文件 | 干嘛 |
 |------|-----|
-| `scripts/install-server.sh` | 一脚本搞定服务端**全生命周期**：未装则首装，已装则弹管理菜单（升级 / 卸载 / 重启 / 状态） |
+| `scripts/install-server.sh` | 一脚本搞定服务端**全生命周期**：未装则首装（自动写 `node_bootstrap` + 探测公网 IP），已装则弹管理菜单（升级 / 卸载 / 重启 / 状态 / 改公网 IP） |
 | `scripts/manage-node.sh` | 扫描节点**装完之后**的管理菜单（升级 / 卸载 / 重启 / 状态）。初装仍走服务端 UI 发的 curl 命令 |
 | `scripts/update-server.sh` | 向后兼容 wrapper，等价于 `install-server.sh --upgrade` |
 | `scripts/update-node.sh` | 向后兼容 wrapper，等价于 `manage-node.sh --upgrade` |
@@ -40,18 +40,18 @@ bash <(curl -fsSL https://raw.githubusercontent.com/york-cmd/scopesentry-deploy/
 
 ## 加扫描节点（每加一台 5 分钟）
 
-服务端补完 `node_bootstrap` 之后：
+服务端已自动写好 `node_bootstrap`（`install-server.sh` 首装时完成）。加节点流程：
 
 1. UI → 节点管理 → 添加节点 → 复制 curl 命令
 2. ssh 到节点机，粘贴跑
 
 详见 [DEPLOY_NODE.md](./DEPLOY_NODE.md)。
 
-## 日常运维（升级 / 卸载 / 重启 / 状态）
+## 日常运维（升级 / 卸载 / 重启 / 状态 / 改公网 IP）
 
 ### 服务端
 
-裸 curl 一行进**管理菜单**（已装时自动检测，弹 5 项菜单）：
+裸 curl 一行进**管理菜单**（已装时自动检测，弹 6 项菜单）：
 
 ```bash
 bash <(curl -fsSL https://raw.githubusercontent.com/york-cmd/scopesentry-deploy/main/scripts/install-server.sh)
@@ -60,12 +60,14 @@ bash <(curl -fsSL https://raw.githubusercontent.com/york-cmd/scopesentry-deploy/
 或者用脚本化 flag 跳菜单：
 
 ```bash
-# 升级
+# 升级（老部署首次跑会自动迁移到 config.yaml bind-mount）
 curl -fsSL https://raw.githubusercontent.com/york-cmd/scopesentry-deploy/main/scripts/install-server.sh | bash -s -- --upgrade
 # 重启 / 卸载（卸载仍走二次确认）/ 状态
 ... | bash -s -- --restart
 ... | bash -s -- --uninstall
 ... | bash -s -- --status
+# 改公网 IP，重写 config.yaml 的 node_bootstrap（自动探测，PUBLIC_IP=... 可覆盖）
+PUBLIC_IP=1.2.3.4 curl -fsSL https://raw.githubusercontent.com/york-cmd/scopesentry-deploy/main/scripts/install-server.sh | bash -s -- --reconfigure
 ```
 
 老 `update-server.sh` 仍可工作，等价于 `--upgrade`：
