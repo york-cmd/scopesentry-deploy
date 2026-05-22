@@ -67,7 +67,7 @@
 - [x] 增强 `enable-stream-task.sh`，新增 `doctor` 并修复扫描端运行时配置提示
 - [x] 覆盖服务端/扫描端 Stream env、UI bundle、Redis Streams、Mongo chunk/DLQ 的脚本测试
 - [x] 新增 Stream 运维化路线文档
-- [ ] 将 P0 脚本提交并同步到远程 deploy 仓库
+- [x] 将 P0 脚本提交并同步到远程 deploy 仓库
 - [ ] 进入 P1 Stream 任务健康看板开发
 - **状态：** in_progress
 

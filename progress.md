@@ -298,6 +298,7 @@
   - `doctor` 检查服务端 compose/container Stream flag、扫描端 node.env/container Stream flag、UI bundle 是否包含 Subdomain stream 进度、Redis stream 是否可访问、Mongo `stream_task_chunks` 是否可访问。
   - 更新 `scripts/tests/enable_stream_task_test.sh`，用 fake docker 覆盖 `enable`、`status` 和 `doctor`。
   - 新增 `docs/superpowers/plans/2026-05-22-stream-operations-roadmap.md`，记录 P0-P4 的交付边界和验收目标。
+  - 提交并推送根仓库到 `origin/main`，提交为 `d7b05ea feat: add stream operations doctor`。
 - 创建/修改的文件：
   - `scripts/enable-stream-task.sh`
   - `scripts/tests/enable_stream_task_test.sh`
