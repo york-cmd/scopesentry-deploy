@@ -213,3 +213,78 @@
   - `ScopeSentry-UI/src/views/Task/ScheduledTask.vue`
   - `ScopeSentry-UI/src/views/Task/components/PageMonit.vue`
   - `scripts/tests/task_table_height_guard_test.sh`
+
+## 会话：2026-05-22
+
+### 阶段 7：SubdomainScan Stream Chunk 开发计划
+- **状态：** complete
+- **开始时间：** 2026-05-22
+- 执行的操作：
+  - 根据用户确认的约束收敛方案：严格阶段模式、只做 SubdomainScan v1、`1 root domain + 1 plugin = 1 chunk`、不做字典切片、DLQ 默认阻塞但可手动忽略。
+  - 复查现有 PortScan Stream Chunk 相关文件、扫描端 streamtask 消费器、SubdomainScan 模块、TargetHandler 输出链路和 UI 端 PortChunkProgress。
+  - 新增详细开发计划 `docs/superpowers/plans/2026-05-22-subdomain-stream-chunk-scheduling.md`，覆盖 19 个任务：模型、stage input 仓库、TargetHandler 持久化、chunk builder、producer/reaper/continuation 泛化、dispatcher、下游 resume、scanner bypass、chunk runner、consumer、API、UI、脚本 smoke 和端到端验证。
+  - 对计划做自检：确认无业务代码改动、无 `git diff --check` 问题、计划中不保留待定文件路径，并补充 scanner 侧不得跨仓 import server models 的约束。
+- 创建/修改的文件：
+  - `docs/superpowers/plans/2026-05-22-subdomain-stream-chunk-scheduling.md`
+  - `task_plan.md`
+  - `findings.md`
+  - `progress.md`
+
+## 测试结果补充（SubdomainScan Stream Chunk 规划）
+| 测试 | 输入 | 预期结果 | 实际结果 | 状态 |
+|------|------|---------|---------|------|
+| 计划占位扫描 | `rg -n "TODO|TBD|placeholder|implement later|fill in|if present|if needed|if the project|not available|where possible|后续|待定|占位" docs/superpowers/plans/2026-05-22-subdomain-stream-chunk-scheduling.md` | 不出现未决实现占位 | 仅命中自检段落中的 `Placeholder scan` 描述 | pass |
+| diff 空白检查 | `git diff --check` | 无尾随空白或补丁格式问题 | 无输出，退出码为 0 | pass |
+
+### 阶段 8：SubdomainScan Stream Chunk 实现
+- **状态：** complete
+- **开始时间：** 2026-05-22
+- 执行的操作：
+  - 在 worktree `/Users/york/.config/superpowers/worktrees/info-scan/subdomain-stream-chunk`、分支 `feature/subdomain-stream-chunk` 中继续实现。
+  - 服务端新增/泛化 stream chunk 管理能力：SubdomainScan chunk 规划、stage gate、continuation、DLQ 阻塞/忽略、summary/DLQ/retry/ignore API 与进度摘要。
+  - 扫描端新增 SubdomainScan stream 消费与执行链路：Subdomain chunk runner、Subdomain resume process、legacy bypass、pending 阶段完成保护、TargetHandler stage input 记录。
+  - 补齐 Subdomain chunk timeout：`timeoutSec` 按秒向上取整为分钟，内置 `subfinder`/`shuffledns`/`oneforall` 注入 `-timeout`，`puredns`/`ksubdomain` 注入 `-et`；模板已显式配置 `-timeout` 或 `-et` 时不覆盖。
+  - UI 将 PortScan chunk 面板泛化为 `StreamChunkProgress`，任务进度中新增 SubdomainScan chunk tab，保留旧 PortScan wrapper 兼容。
+  - 本地脚本补充 `STREAM_SUBDOMAIN_ENABLED`、`STREAM_SUBDOMAIN_CHUNK_TIMEOUT_SECONDS`、`ADAPTIVE_PULL_ENABLED` 等环境变量透传，并新增 Subdomain stream dry-run smoke 与 env 测试。
+  - 核对当前运行端口：`ScopeSentry-UI/vite.config.ts` 使用 `4000` 并代理到 `8080`，`ScopeSentry/single-host-deployment.yml` 使用 `8080:8080`，脚本默认 `BACKEND_URL=http://127.0.0.1:8080`。
+- 创建/修改的文件：
+  - `ScopeSentry/internal/models/stream_task.go`
+  - `ScopeSentry/internal/repositories/streamtask/*`
+  - `ScopeSentry/internal/repositories/streamstageinput/*`
+  - `ScopeSentry/internal/services/streamdispatch/*`
+  - `ScopeSentry/internal/api/handlers/streamtask/*`
+  - `ScopeSentry/internal/api/routes/task/task.go`
+  - `ScopeSentry/internal/services/task/task/task.go`
+  - `ScopeSentry-Scan/internal/streamtask/*`
+  - `ScopeSentry-Scan/internal/runner/runner.go`
+  - `ScopeSentry-Scan/modules/manage.go`
+  - `ScopeSentry-Scan/modules/subdomainscan/module.go`
+  - `ScopeSentry-Scan/modules/targethandler/module.go`
+  - `ScopeSentry-UI/src/api/task/index.ts`
+  - `ScopeSentry-UI/src/api/task/types.ts`
+  - `ScopeSentry-UI/src/views/Task/components/StreamChunkProgress.vue`
+  - `ScopeSentry-UI/src/views/Task/components/PortChunkProgress.vue`
+  - `ScopeSentry-UI/src/views/Task/components/ProgressInfo.vue`
+  - `scripts/dev-scan.sh`
+  - `scripts/dev-scan-docker.sh`
+  - `scripts/dev-scan-docker-compose.yml`
+  - `scripts/dev-smoke.sh`
+  - `scripts/tests/subdomain_stream_chunk_smoke.sh`
+  - `scripts/tests/stream_subdomain_env_test.sh`
+
+## 测试结果补充（SubdomainScan Stream Chunk 实现）
+| 测试 | 输入 | 预期结果 | 实际结果 | 状态 |
+|------|------|---------|---------|------|
+| 扫描端 timeout RED | `go test ./internal/streamtask -run 'TaskOptionsFromMessage.*Subdomain.*Timeout' -v` | 新增测试先失败，证明能捕捉未注入 timeout 的缺口 | 失败于参数仍为 `-t 10`，未包含 `-timeout 120` | pass |
+| 扫描端 streamtask 定向 | `go test ./internal/streamtask -run 'TaskOptionsFromMessage|Subdomain' -v` | 消息解析、Subdomain 路由和 timeout 注入通过 | 命令退出码 0 | pass |
+| 扫描端 Subdomain chunk 定向 | `go test ./internal/streamtask ./modules/subdomainscan -run 'Subdomain|Stream|Message|Chunk|TaskOptionsFromMessage' -v` | Subdomain stream 消费、chunk runner、结果处理通过 | 命令退出码 0 | pass |
+| 扫描端扩展定向 | `go test ./internal/results ./internal/streamtask ./internal/task ./internal/runner ./modules ./modules/targethandler ./modules/subdomainscan ./modules/portscan -run 'Subdomain|Stream|Message|Handler|Consumer|Lease|Bypass|Chunk|TargetHandler|PortScan|Resume|RecordTaskEnd|TaskOptionsFromMessage' -v` | 扫描端相关链路均通过 | 命令退出码 0 | pass |
+| 服务端定向 | `go test ./internal/models ./internal/database/mongodb ./internal/repositories/streamtask ./internal/repositories/streamstageinput ./internal/services/streamdispatch ./internal/services/task/task ./internal/api/handlers/streamtask ./internal/api/routes/task -run 'StreamTask|StreamStageInput|Subdomain|Continuation|Chunk|Producer|Reaper|DLQ|Dispatcher|Progress|Register|PortScan|Summary|Retry|StreamChunkSummary' -v` | stream task、stage input、dispatcher、continuation、API、summary 均通过 | 命令退出码 0；Mongo/Redis 初始化有连接日志，相关 repo 测试按 fake/skip 设计处理 | pass |
+| UI 定向 ESLint | `pnpm exec eslint --ext .js,.ts,.vue ./src/views/Task/components/StreamChunkProgress.vue ./src/views/Task/components/PortChunkProgress.vue ./src/views/Task/components/ProgressInfo.vue ./src/api/task/index.ts ./src/api/task/types.ts` | 本轮新增/修改 UI 文件 lint 通过 | 命令退出码 0 | pass |
+| UI 生产构建 | `pnpm run build:pro` | 可生成生产构建 | 输出 `Build successful. Please see dist-pro directory`，命令退出码 0 | pass |
+| UI 全仓类型检查 | `pnpm run ts:check` | 记录全仓类型状态 | 退出码 2；失败集中在既有未使用导入、`Asset/asset` 大小写冲突、Element Plus `ISelectProps` 等，不指向本轮新增文件 | known-fail |
+| Subdomain env 测试 | `bash scripts/tests/stream_subdomain_env_test.sh` | 脚本正确透传 Subdomain stream env | 输出 `stream subdomain env test passed` | pass |
+| Subdomain smoke dry-run | `scripts/tests/subdomain_stream_chunk_smoke.sh --dry-run` | dry-run 不触发真实扫描但能校验流程参数 | 输出 `subdomain stream chunk smoke dry-run passed` | pass |
+| 脚本语法 | `bash -n scripts/dev-scan.sh scripts/dev-scan-docker.sh scripts/dev-smoke.sh scripts/tests/subdomain_stream_chunk_smoke.sh scripts/tests/stream_subdomain_env_test.sh scripts/tests/dev_scan_env_smoke.sh` | 相关脚本语法合法 | 命令退出码 0 | pass |
+| diff 空白检查 | `git diff --check && git -C ScopeSentry diff --check && git -C ScopeSentry-Scan diff --check && git -C ScopeSentry-UI diff --check` | 无尾随空白和补丁空白错误 | 命令退出码 0 | pass |
+| 端口配置核对 | `rg -n "8082|4001" ScopeSentry-UI/vite.config.ts ScopeSentry/single-host-deployment.yml scripts LOCAL_DEV_SETUP.md ...` 与 `rg -n "4000|8080|proxy|BACKEND_URL" ...` | 当前运行配置使用 `8080/4000` | 配置文件和脚本默认值为 `8080/4000`；`8082/4001` 只剩历史记录、测试数据或端口字典 | pass |

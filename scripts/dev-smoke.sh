@@ -8,6 +8,11 @@ if [[ "${1:-}" == "--stream-portscan" ]]; then
   exec "$ROOT_DIR/scripts/tests/portscan_stream_chunk_smoke.sh" "$@"
 fi
 
+if [[ "${1:-}" == "--stream-subdomain" ]]; then
+  shift
+  exec "$ROOT_DIR/scripts/tests/subdomain_stream_chunk_smoke.sh" "$@"
+fi
+
 LOCAL_DEV_DIR="$ROOT_DIR/.local-dev"
 SERVER_RUNTIME_DIR="$LOCAL_DEV_DIR/runtime/server"
 SCAN_RUNTIME_DIR="$LOCAL_DEV_DIR/runtime/scan-host"

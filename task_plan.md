@@ -4,7 +4,7 @@
 为 `ScopeSentry`、`ScopeSentry-Scan`、`ScopeSentry-UI` 制定一套适合当前仓库状态的本地开发启动方案，并在必要时落成文档或脚本。
 
 ## 当前阶段
-阶段 6
+阶段 8
 
 ## 各阶段
 
@@ -45,6 +45,23 @@
 - [ ] 按计划推进交互补齐、运行态验证与性能收口
 - **状态：** in_progress
 
+### 阶段 7：SubdomainScan Stream Chunk 开发计划
+- [x] 确认产品决策：严格阶段模式、SubdomainScan v1、root domain x plugin chunk、DLQ 默认阻塞
+- [x] 复查现有 PortScan Stream Chunk、扫描链路、SubdomainScan 模块与 UI 进度组件
+- [x] 编写详细开发计划，覆盖服务端、扫描端、UI、脚本、测试和上线回滚
+- [x] 自检计划覆盖度、占位内容、类型命名和文件路径
+- **状态：** complete
+
+### 阶段 8：SubdomainScan Stream Chunk 实现
+- [x] 在隔离 worktree `feature/subdomain-stream-chunk` 中落地 SubdomainScan stream chunk v1
+- [x] 服务端复用 PortScan 的 Redis Streams + Lease + DLQ 模型，新增 SubdomainScan stage-aware chunk、API、summary/DLQ/retry/ignore 能力
+- [x] 扫描端新增 SubdomainScan stream consumer、chunk runner、legacy bypass、downstream resume 和 chunk timeout 注入
+- [x] UI 泛化 StreamChunkProgress，并在任务进度中展示 SubdomainScan chunk 与 PortScan chunk
+- [x] 本地脚本补充 Subdomain stream 开关、timeout、dry-run smoke 与环境变量验证
+- [x] 端口配置核对为 `8080` 后端和 `4000` 前端，不再使用 `8082`/`4001` 作为当前运行配置
+- [x] 完成 Go 定向测试、UI ESLint、UI 生产构建、脚本验证与 diff 空白检查
+- **状态：** complete
+
 ## 关键问题
 1. 本地开发方案是否需要只给文档，还是要顺手落成启动脚本/README。
 2. 用户当前二开的重点是 UI/API，还是扫描链路与插件。
@@ -68,6 +85,13 @@
 | `dev-smoke.sh` 默认扫描驱动改为 Docker | 让 smoke 在各平台都优先走容器化扫描节点，避免误起宿主机节点 |
 | 新增 `dev-scan-docker-build.sh` | 给扫描端二开提供“源码改动 -> Linux 二进制 -> 本地镜像 -> Docker 节点重启”的快速回归路径 |
 | 子域名对比功能下一阶段先做“真实任务验证 + 交互补齐 + 性能收口” | 当前基础能力已具备，继续堆新功能前应先把可用性和稳定性收紧 |
+| SubdomainScan chunk v1 采用 `1 root domain + 1 plugin = 1 chunk` | 先解决多节点可靠分配、租约重试和 DLQ，避免一开始引入字典切片导致复杂度过高 |
+| SubdomainScan stream 模式保持 opt-in，旧链路保留 | 降低上线风险，可以先在本地和少量节点验证 |
+| SubdomainScan 采用严格阶段模式 | 保证 PortScan 等下游不会在子域名阶段未终态前提前开始 |
+| TargetHandler 输出需要持久化到 `stream_stage_inputs` | 旧链路依赖内存 channel，服务端要规划子域名 chunk 必须拿到规范化后的根域名和透传目标 |
+| v1 不让同一节点并发运行同一个 SubdomainScan 插件实例 | 当前插件会调用 `SetParameter`、`SetResult`、`SetTaskId`，插件实例可变，并发复用风险较高 |
+| SubdomainScan chunk timeout 注入到内置插件参数 | `timeoutSec` 只在队列消息里存在还不够，执行插件时必须转成 `-timeout` 或 `-et` 才能约束长时间运行 |
+| 当前本地运行端口固定为后端 `8080`、前端 `4000` | 用户明确不要继续使用 `8082`/`4001`，当前 Vite proxy、compose 和脚本默认值均按该端口核对 |
 
 ## 遇到的错误
 | 错误 | 尝试次数 | 解决方案 |

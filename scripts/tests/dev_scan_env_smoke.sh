@@ -31,6 +31,8 @@ set -euo pipefail
 printf 'NodeName=%s\n' "${NodeName:-}"
 printf 'TASK_MODE=%s\n' "${TASK_MODE:-}"
 printf 'STREAM_PORTSCAN_ENABLED=%s\n' "${STREAM_PORTSCAN_ENABLED:-}"
+printf 'STREAM_SUBDOMAIN_ENABLED=%s\n' "${STREAM_SUBDOMAIN_ENABLED:-}"
+printf 'STREAM_SUBDOMAIN_CHUNK_TIMEOUT_SECONDS=%s\n' "${STREAM_SUBDOMAIN_CHUNK_TIMEOUT_SECONDS:-}"
 printf 'ADAPTIVE_PULL_ENABLED=%s\n' "${ADAPTIVE_PULL_ENABLED:-}"
 printf 'MONGODB_DATABASE=%s\n' "${MONGODB_DATABASE:-}"
 BIN
@@ -43,6 +45,8 @@ output="$(
     NODE_NAME=stream-node-from-node-name \
     TASK_MODE=stream \
     STREAM_PORTSCAN_ENABLED=true \
+    STREAM_SUBDOMAIN_ENABLED=true \
+    STREAM_SUBDOMAIN_CHUNK_TIMEOUT_SECONDS=123 \
     ADAPTIVE_PULL_ENABLED=true \
     MONGODB_DATABASE=ScopeSentryEnvSmoke \
     SCAN_RUNTIME_DIR="$TMP_DIR/runtime" \
@@ -52,6 +56,8 @@ output="$(
 grep -q '^NodeName=stream-node-from-node-name$' <<<"$output"
 grep -q '^TASK_MODE=stream$' <<<"$output"
 grep -q '^STREAM_PORTSCAN_ENABLED=true$' <<<"$output"
+grep -q '^STREAM_SUBDOMAIN_ENABLED=true$' <<<"$output"
+grep -q '^STREAM_SUBDOMAIN_CHUNK_TIMEOUT_SECONDS=123$' <<<"$output"
 grep -q '^ADAPTIVE_PULL_ENABLED=true$' <<<"$output"
 grep -q '^MONGODB_DATABASE=ScopeSentryEnvSmoke$' <<<"$output"
 
