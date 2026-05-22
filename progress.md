@@ -288,3 +288,25 @@
 | 脚本语法 | `bash -n scripts/dev-scan.sh scripts/dev-scan-docker.sh scripts/dev-smoke.sh scripts/tests/subdomain_stream_chunk_smoke.sh scripts/tests/stream_subdomain_env_test.sh scripts/tests/dev_scan_env_smoke.sh` | 相关脚本语法合法 | 命令退出码 0 | pass |
 | diff 空白检查 | `git diff --check && git -C ScopeSentry diff --check && git -C ScopeSentry-Scan diff --check && git -C ScopeSentry-UI diff --check` | 无尾随空白和补丁空白错误 | 命令退出码 0 | pass |
 | 端口配置核对 | `rg -n "8082|4001" ScopeSentry-UI/vite.config.ts ScopeSentry/single-host-deployment.yml scripts LOCAL_DEV_SETUP.md ...` 与 `rg -n "4000|8080|proxy|BACKEND_URL" ...` | 当前运行配置使用 `8080/4000` | 配置文件和脚本默认值为 `8080/4000`；`8082/4001` 只剩历史记录、测试数据或端口字典 | pass |
+
+### 阶段 9：Stream 运维化路线与 P0 脚本
+- **状态：** in_progress
+- **开始时间：** 2026-05-22
+- 执行的操作：
+  - 根据用户确认的路线，将后续工作固定为 P0 状态确认脚本、P1 健康看板、P2 任务控制、P3 节点容量治理、P4 其他模块分片。
+  - 增强 `scripts/enable-stream-task.sh`：新增 `doctor` 子命令；`status` 增加扫描端 container env；扫描端缺少 `/apps/config/config.yaml` 时改为说明运行时会使用容器 env。
+  - `doctor` 检查服务端 compose/container Stream flag、扫描端 node.env/container Stream flag、UI bundle 是否包含 Subdomain stream 进度、Redis stream 是否可访问、Mongo `stream_task_chunks` 是否可访问。
+  - 更新 `scripts/tests/enable_stream_task_test.sh`，用 fake docker 覆盖 `enable`、`status` 和 `doctor`。
+  - 新增 `docs/superpowers/plans/2026-05-22-stream-operations-roadmap.md`，记录 P0-P4 的交付边界和验收目标。
+- 创建/修改的文件：
+  - `scripts/enable-stream-task.sh`
+  - `scripts/tests/enable_stream_task_test.sh`
+  - `docs/superpowers/plans/2026-05-22-stream-operations-roadmap.md`
+  - `task_plan.md`
+  - `progress.md`
+
+## 测试结果补充（Stream 运维化 P0）
+| 测试 | 输入 | 预期结果 | 实际结果 | 状态 |
+|------|------|---------|---------|------|
+| enable/status/doctor 脚本测试 | `bash scripts/tests/enable_stream_task_test.sh` | fake Docker 环境下 enable、status、doctor 均通过 | 输出 `enable stream task script test passed` | pass |
+| 脚本语法 | `bash -n scripts/enable-stream-task.sh scripts/tests/enable_stream_task_test.sh` | 脚本语法合法 | 命令退出码 0 | pass |

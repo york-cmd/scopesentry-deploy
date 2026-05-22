@@ -4,7 +4,7 @@
 为 `ScopeSentry`、`ScopeSentry-Scan`、`ScopeSentry-UI` 制定一套适合当前仓库状态的本地开发启动方案，并在必要时落成文档或脚本。
 
 ## 当前阶段
-阶段 8
+阶段 9
 
 ## 各阶段
 
@@ -62,6 +62,15 @@
 - [x] 完成 Go 定向测试、UI ESLint、UI 生产构建、脚本验证与 diff 空白检查
 - **状态：** complete
 
+### 阶段 9：Stream 运维化路线与 P0 脚本
+- [x] 确认后续路线：P0 状态确认脚本、P1 健康看板、P2 任务控制、P3 节点容量治理、P4 其他模块分片
+- [x] 增强 `enable-stream-task.sh`，新增 `doctor` 并修复扫描端运行时配置提示
+- [x] 覆盖服务端/扫描端 Stream env、UI bundle、Redis Streams、Mongo chunk/DLQ 的脚本测试
+- [x] 新增 Stream 运维化路线文档
+- [ ] 将 P0 脚本提交并同步到远程 deploy 仓库
+- [ ] 进入 P1 Stream 任务健康看板开发
+- **状态：** in_progress
+
 ## 关键问题
 1. 本地开发方案是否需要只给文档，还是要顺手落成启动脚本/README。
 2. 用户当前二开的重点是 UI/API，还是扫描链路与插件。
@@ -92,6 +101,8 @@
 | v1 不让同一节点并发运行同一个 SubdomainScan 插件实例 | 当前插件会调用 `SetParameter`、`SetResult`、`SetTaskId`，插件实例可变，并发复用风险较高 |
 | SubdomainScan chunk timeout 注入到内置插件参数 | `timeoutSec` 只在队列消息里存在还不够，执行插件时必须转成 `-timeout` 或 `-et` 才能约束长时间运行 |
 | 当前本地运行端口固定为后端 `8080`、前端 `4000` | 用户明确不要继续使用 `8082`/`4001`，当前 Vite proxy、compose 和脚本默认值均按该端口核对 |
+| Stream 后续按默认模式演进，不再优先做 UI 开关 | 用户确认后期肯定都是 Stream 模式，P0 重点回到上线状态确认脚本 |
+| P1 优先做健康看板，再做控制和容量治理 | 先解决“任务为什么跑很久”的可观测问题，再给操作入口，降低误操作风险 |
 
 ## 遇到的错误
 | 错误 | 尝试次数 | 解决方案 |

@@ -39,6 +39,11 @@
 - SubdomainScan chunk timeout 不能只留在 Redis message；扫描端执行插件前需要转换成插件参数。当前规则是秒数向上取整为分钟，`subfinder`/`shuffledns`/`oneforall` 使用 `-timeout`，`puredns`/`ksubdomain` 使用 `-et`，模板已显式设置 `-timeout` 或 `-et` 时不覆盖。
 - 当前本地运行端口已统一回 `8080/4000`：Vite dev server 使用 `4000`，代理目标是 `127.0.0.1:8080`；后端 compose 暴露 `8080:8080`；脚本默认 `BACKEND_URL=http://127.0.0.1:8080`。
 - `pnpm run ts:check` 仍存在全仓既有类型问题，主要包括未使用导入、`Asset/asset` 文件大小写冲突、Element Plus `ISelectProps` 不存在、部分旧页面 props/返回值类型不匹配；本轮新增的 Stream chunk UI 定向 ESLint 和生产构建已通过。
+- 用户确认 Stream 后续会成为默认模式，因此当前不做服务端 UI 开关，P0 回到上线状态确认脚本。
+- P0 运维脚本需要支持服务端和扫描端分机部署：某一侧未安装时应提示跳过，不应误判整机失败。
+- 扫描端容器可能没有 `/apps/config/config.yaml`，因为当前官方节点 compose 没有挂载 `/apps/config`；这种情况下应优先看 `node.env` 和 container env，而不是把缺文件当成错误。
+- 服务端 UI 是否包含最新 Subdomain stream 面板，可在容器里 grep `/opt/ScopeSentry/ScopeSentry` 中的 `subdomainScanChunks`、`subdomainChunkProgress` 或 `子域名分片进度` 判断。
+- Redis Streams 和 Mongo chunk/DLQ 的上线确认可先通过脚本检查可访问性和概要计数，详细速度、卡顿、节点归属应放到 P1 健康看板。
 
 ## 技术决策
 | 决策 | 理由 |
@@ -60,6 +65,7 @@
 | SubdomainScan chunk timeout 只注入已知内置/模板插件 | 自定义插件参数语义不可知，强行追加未知 flag 可能破坏执行；未知插件先保持模板参数不变 |
 | DLQ 默认继续阻塞但提供 ignore | 保留可靠性优先的默认行为，同时允许用户确认风险后以部分结果继续下游 |
 | 当前 worktree 保留用于后续集成 | 三个子仓都有大量未提交 baseline 改动，直接清理或自动合并风险较高，后续应单独执行合回/推送步骤 |
+| Stream 运维化按 P0-P4 分阶段推进 | 先脚本确认上线状态，再做健康看板、任务控制、节点容量治理，最后才扩展 DirScan/URLScan/WebCrawler/VulnerabilityScan |
 
 ## 遇到的问题
 | 问题 | 解决方案 |

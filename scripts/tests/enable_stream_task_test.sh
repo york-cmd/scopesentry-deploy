@@ -52,12 +52,31 @@ cat >"$BIN_DIR/docker" <<'SH'
 set -euo pipefail
 printf '%s\n' "$*" >>"${CALLS_FILE:?}"
 if [[ "${1:-}" == "inspect" ]]; then
+  if [[ "$*" == *".Config.Env"* ]]; then
+    printf 'STREAM_PORTSCAN_ENABLED=true\n'
+    printf 'STREAM_SUBDOMAIN_ENABLED=true\n'
+    printf 'TASK_MODE=stream\n'
+    printf 'STREAM_SUBDOMAIN_CHUNK_TIMEOUT_SECONDS=7200\n'
+    printf 'ADAPTIVE_PULL_ENABLED=true\n'
+  fi
   exit 0
 fi
 if [[ "${1:-}" == "exec" ]]; then
-  printf 'taskMode: stream\n'
-  printf '  streamPortScanEnabled: true\n'
-  printf '  streamSubdomainScanEnabled: true\n'
+  case "$*" in
+    *scope-sentry*"subdomainScanChunks"*)
+      printf 'subdomainScanChunks\n'
+      ;;
+    *scopesentry-redis*)
+      printf 'scan:stream:PortScan length=0 groups=0 dlq=0\n'
+      printf 'scan:stream:SubdomainScan length=0 groups=0 dlq=0\n'
+      ;;
+    *scopesentry-mongodb*)
+      printf 'stream_task_chunks total=0 dlq=0\n'
+      ;;
+    *scopesentry-scan*)
+      printf 'runtime config: not found; container env will be used before first generated config exists\n'
+      ;;
+  esac
   exit 0
 fi
 if [[ "${1:-}" == "compose" ]]; then
@@ -107,5 +126,28 @@ status_output="$(
 
 grep -Fq 'Server' <<<"$status_output" || fail "expected status to include Server section"
 grep -Fq 'Scan Node' <<<"$status_output" || fail "expected status to include Scan Node section"
+grep -Fq 'container env' <<<"$status_output" || fail "expected status to include container env"
+grep -Fq 'runtime config: not found; container env will be used' <<<"$status_output" || fail "expected status to explain missing runtime config"
+
+CALLS_FILE="$CALLS_FILE" \
+PATH="$BIN_DIR:$PATH" \
+SCOPESENTRY_INSTALL_DIR="$SERVER_DIR" \
+SCOPESENTRY_NODE_ETC_DIR="$NODE_ETC_DIR" \
+SCOPESENTRY_NODE_DATA_DIR="$NODE_DATA_DIR" \
+  "$REPO_ROOT/scripts/enable-stream-task.sh" enable --adaptive --no-restart >/dev/null
+
+doctor_output="$(
+  CALLS_FILE="$CALLS_FILE" \
+  PATH="$BIN_DIR:$PATH" \
+  SCOPESENTRY_INSTALL_DIR="$SERVER_DIR" \
+  SCOPESENTRY_NODE_ETC_DIR="$NODE_ETC_DIR" \
+  SCOPESENTRY_NODE_DATA_DIR="$NODE_DATA_DIR" \
+    "$REPO_ROOT/scripts/enable-stream-task.sh" doctor
+)"
+
+grep -Fq 'UI bundle: present' <<<"$doctor_output" || fail "expected doctor to check bundled UI"
+grep -Fq 'Redis Streams' <<<"$doctor_output" || fail "expected doctor to check Redis streams"
+grep -Fq 'Mongo Stream Chunks' <<<"$doctor_output" || fail "expected doctor to check Mongo stream chunks"
+grep -Fq 'doctor result: pass' <<<"$doctor_output" || fail "expected doctor to pass in healthy fake environment"
 
 printf 'enable stream task script test passed\n'
