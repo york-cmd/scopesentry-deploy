@@ -357,7 +357,7 @@
 - 服务端/UI 子仓库本地 main 相对 `Autumn-27` upstream 有历史分叉，本轮未直接推送到上游官方仓库。
 
 ### 阶段 11：P2 Stream 任务控制能力
-- **状态：** in_progress
+- **状态：** complete
 - **开始时间：** 2026-05-26
 - 执行的操作：
   - 在服务端 worktree `/Users/york/.config/superpowers/worktrees/info-scan/stream-task-controls/ScopeSentry`、扫描端 worktree `/Users/york/.config/superpowers/worktrees/info-scan/stream-task-controls/ScopeSentry-Scan`、UI worktree `/Users/york/.config/superpowers/worktrees/info-scan/stream-task-controls/ScopeSentry-UI` 中实现 P2。
