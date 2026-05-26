@@ -44,6 +44,8 @@
 - 扫描端容器可能没有 `/apps/config/config.yaml`，因为当前官方节点 compose 没有挂载 `/apps/config`；这种情况下应优先看 `node.env` 和 container env，而不是把缺文件当成错误。
 - 服务端 UI 是否包含最新 Subdomain stream 面板，可在容器里 grep `/opt/ScopeSentry/ScopeSentry` 中的 `subdomainScanChunks`、`subdomainChunkProgress` 或 `子域名分片进度` 判断。
 - Redis Streams 和 Mongo chunk/DLQ 的上线确认可先通过脚本检查可访问性和概要计数，详细速度、卡顿、节点归属应放到 P1 健康看板。
+- P1 健康看板需要避免对大任务全量拉取 chunk。已采用 running/retrying 明细、最近 5 分钟 finished chunk、最后 1 条 finished chunk 分开查询的方式，降低任务跑很久或 chunk 很多时的接口压力。
+- P1 中 `failed` 当前等价于 `dlq`，因为 stream chunk 终态失败目前以 DLQ 表示；后续如果新增非 DLQ 的 failed 状态，需要单独计数。
 
 ## 技术决策
 | 决策 | 理由 |
@@ -66,6 +68,8 @@
 | DLQ 默认继续阻塞但提供 ignore | 保留可靠性优先的默认行为，同时允许用户确认风险后以部分结果继续下游 |
 | 当前 worktree 保留用于后续集成 | 三个子仓都有大量未提交 baseline 改动，直接清理或自动合并风险较高，后续应单独执行合回/推送步骤 |
 | Stream 运维化按 P0-P4 分阶段推进 | 先脚本确认上线状态，再做健康看板、任务控制、节点容量治理，最后才扩展 DirScan/URLScan/WebCrawler/VulnerabilityScan |
+| P1 先只展示可观测信息，不做暂停/恢复/释放/批量 retry 等操作 | 这些属于 P2 控制能力；先把状态判断做准，避免 UI 上线后误操作影响任务 |
+| 运行中分片明细只展示 running/retrying | 这是用户排查“卡在哪个节点/插件/目标”的核心信息，比展示所有历史 chunk 更高信号且成本更低 |
 
 ## 遇到的问题
 | 问题 | 解决方案 |

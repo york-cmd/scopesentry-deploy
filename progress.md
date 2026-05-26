@@ -311,3 +311,43 @@
 |------|------|---------|---------|------|
 | enable/status/doctor 脚本测试 | `bash scripts/tests/enable_stream_task_test.sh` | fake Docker 环境下 enable、status、doctor 均通过 | 输出 `enable stream task script test passed` | pass |
 | 脚本语法 | `bash -n scripts/enable-stream-task.sh scripts/tests/enable_stream_task_test.sh` | 脚本语法合法 | 命令退出码 0 | pass |
+
+### 阶段 10：P1 Stream 任务健康看板
+- **状态：** in_progress
+- **开始时间：** 2026-05-22
+- 执行的操作：
+  - 在服务端 worktree `/Users/york/.config/superpowers/worktrees/info-scan/stream-health-dashboard/ScopeSentry`、分支 `feature/stream-health-dashboard` 中实现 P1 后端改动。
+  - 在 UI worktree `/Users/york/.config/superpowers/worktrees/info-scan/stream-health-dashboard/ScopeSentry-UI`、分支 `feature/stream-health-dashboard` 中实现 P1 前端改动。
+  - 服务端 `streamtask.Summary` 新增 `StreamChunkHealthSummary`，返回 `failed`、`cancelled`、`stuck`、`leaseExpired`、`oldestRunningSeconds`、`lastFinishedAt`、`finishedLastMinute`、`finishedLastFiveMinutes`、`nodeActivity`、`runningChunks`。
+  - `GetTaskProgress` 的 `subdomainScanChunks` / `portScanChunks` 同步返回相同健康字段，保证任务进度页和独立 summary API 一致。
+  - 将健康统计从“按阶段全量读取所有 chunk”改为三类窗口化查询：running/retrying 明细、最近 5 分钟 finished chunk、最后 1 条 finished chunk，避免大任务看板接口过重。
+  - UI `StreamChunkProgress.vue` 新增汇总指标、健康指标、运行中分片表、节点活跃表，并保留原 DLQ retry/ignore 表。
+  - 补齐中英文 i18n 和 TypeScript 类型。
+  - 2026-05-26：将 P1 服务端和 UI 源码改动从隔离 worktree 合入当前主目录；没有触碰服务端主目录中已有的 `cmd/main/static` 生成资源改动。
+  - 2026-05-26：在当前主目录重新运行后端定向测试、UI ESLint、UI 生产构建和 diff 空白检查。
+- 创建/修改的文件：
+  - `ScopeSentry/internal/api/handlers/streamtask/admin.go`
+  - `ScopeSentry/internal/api/handlers/streamtask/admin_test.go`
+  - `ScopeSentry/internal/services/task/task/task.go`
+  - `ScopeSentry/internal/services/task/task/stream_chunk_summary_test.go`
+  - `ScopeSentry-UI/src/api/task/types.ts`
+  - `ScopeSentry-UI/src/locales/en.ts`
+  - `ScopeSentry-UI/src/locales/zh-CN.ts`
+  - `ScopeSentry-UI/src/views/Task/components/StreamChunkProgress.vue`
+
+## 测试结果补充（Stream 运维化 P1）
+| 测试 | 输入 | 预期结果 | 实际结果 | 状态 |
+|------|------|---------|---------|------|
+| 后端定向测试 | `go test ./internal/api/handlers/streamtask ./internal/services/task/task ./internal/api/routes/task -run 'Stream|Summary|DLQ|Retry|Register' -v` | Stream summary、DLQ、retry、route 注册测试通过 | 命令退出码 0；Redis NOAUTH 和 Mongo URI 为既有初始化日志，不影响测试 | pass |
+| UI 定向 ESLint | `pnpm exec eslint --ext .js,.ts,.vue ./src/views/Task/components/StreamChunkProgress.vue ./src/api/task/types.ts ./src/locales/zh-CN.ts ./src/locales/en.ts` | 本轮 UI 文件 lint 通过 | 命令退出码 0 | pass |
+| UI 生产构建 | `pnpm run build:pro` | 可生成生产构建 | 输出 `Build successful. Please see dist-pro directory`，命令退出码 0 | pass |
+| 服务端 diff 空白检查 | `git diff --check` | 无尾随空白或补丁空白问题 | 命令退出码 0 | pass |
+| UI diff 空白检查 | `git diff --check` | 无尾随空白或补丁空白问题 | 命令退出码 0 | pass |
+| 当前主目录后端定向测试 | `go test ./internal/api/handlers/streamtask ./internal/services/task/task ./internal/api/routes/task -run 'Stream|Summary|DLQ|Retry|Register' -v` | 合入后仍通过 | 命令退出码 0；Redis NOAUTH 和 Mongo URI 为既有初始化日志 | pass |
+| 当前主目录 UI 定向 ESLint | `pnpm exec eslint --ext .js,.ts,.vue ./src/views/Task/components/StreamChunkProgress.vue ./src/api/task/types.ts ./src/locales/zh-CN.ts ./src/locales/en.ts` | 合入后仍通过 | 命令退出码 0 | pass |
+| 当前主目录 UI 生产构建 | `pnpm run build:pro` | 合入后能构建生产包 | 输出 `Build successful. Please see dist-pro directory`，命令退出码 0 | pass |
+| 当前主目录 diff 空白检查 | `git diff --check -- <P1 服务端/UI 文件>` | P1 文件无空白问题 | 命令退出码 0 | pass |
+
+## 待确认
+- P1 源码已合入 `/Users/york/ai-proctet/info-scan/ScopeSentry` 和 `/Users/york/ai-proctet/info-scan/ScopeSentry-UI` 主目录，但尚未推送到上游 `Autumn-27` 远程。
+- 服务端主目录原本已有大量 `cmd/main/static` 生成资源变更，本轮未清理也未覆盖；如果要让服务端内嵌前端立刻带上 P1 UI，需要另做一次受控静态资源同步。

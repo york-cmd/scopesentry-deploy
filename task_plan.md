@@ -4,7 +4,7 @@
 为 `ScopeSentry`、`ScopeSentry-Scan`、`ScopeSentry-UI` 制定一套适合当前仓库状态的本地开发启动方案，并在必要时落成文档或脚本。
 
 ## 当前阶段
-阶段 9
+阶段 10
 
 ## 各阶段
 
@@ -68,7 +68,17 @@
 - [x] 覆盖服务端/扫描端 Stream env、UI bundle、Redis Streams、Mongo chunk/DLQ 的脚本测试
 - [x] 新增 Stream 运维化路线文档
 - [x] 将 P0 脚本提交并同步到远程 deploy 仓库
-- [ ] 进入 P1 Stream 任务健康看板开发
+- [x] 进入 P1 Stream 任务健康看板开发
+- **状态：** complete
+
+### 阶段 10：P1 Stream 任务健康看板
+- [x] 在隔离 worktree `feature/stream-health-dashboard` 中实现服务端和 UI 改动
+- [x] 服务端 Stream summary/API 和任务进度摘要新增健康指标：pending、queued、running、success、failed、DLQ、ignored、stuck、lease expired、oldest running、last finished、1/5 分钟完成量、node activity、running chunks
+- [x] 后端健康统计改为窗口化查询，避免看板接口全量拉取大任务 chunk
+- [x] UI 在 `StreamChunkProgress` 中展示健康指标、运行中分片表、节点活跃表和原 DLQ 表
+- [x] 覆盖后端定向 Go 测试、UI ESLint、UI 生产构建和 diff 空白检查
+- [x] 将两个 feature worktree 的 P1 源码改动合入当前主目录
+- [ ] 决定是否推送服务端/UI 子仓库分支或继续保留本地提交
 - **状态：** in_progress
 
 ## 关键问题
@@ -103,6 +113,7 @@
 | 当前本地运行端口固定为后端 `8080`、前端 `4000` | 用户明确不要继续使用 `8082`/`4001`，当前 Vite proxy、compose 和脚本默认值均按该端口核对 |
 | Stream 后续按默认模式演进，不再优先做 UI 开关 | 用户确认后期肯定都是 Stream 模式，P0 重点回到上线状态确认脚本 |
 | P1 优先做健康看板，再做控制和容量治理 | 先解决“任务为什么跑很久”的可观测问题，再给操作入口，降低误操作风险 |
+| P1 健康看板后端统计使用窗口化查询 | 大任务下如果全量读取 chunk，看板本身会拖慢服务端；运行中分片、最近完成量和最后完成时间应分别按状态/时间窗口查询 |
 
 ## 遇到的错误
 | 错误 | 尝试次数 | 解决方案 |
