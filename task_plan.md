@@ -4,7 +4,7 @@
 为 `ScopeSentry`、`ScopeSentry-Scan`、`ScopeSentry-UI` 制定一套适合当前仓库状态的本地开发启动方案，并在必要时落成文档或脚本。
 
 ## 当前阶段
-阶段 10
+阶段 11
 
 ## 各阶段
 
@@ -79,7 +79,17 @@
 - [x] 覆盖后端定向 Go 测试、UI ESLint、UI 生产构建和 diff 空白检查
 - [x] 将两个 feature worktree 的 P1 源码改动合入当前主目录
 - [x] 发布包含 P1 健康看板 UI 的服务端 GHCR 镜像
-- [ ] 继续 P2 任务控制能力开发
+- [x] 继续 P2 任务控制能力开发
+- **状态：** complete
+
+### 阶段 11：P2 Stream 任务控制能力
+- [x] 在隔离 worktree `feature/stream-task-controls` 中实现服务端、扫描端和 UI 改动
+- [x] 服务端新增 `stream_task_controls` 控制状态，支持 pause/resume/cancel，调度和 continuation 都会读取控制状态
+- [x] 服务端新增 DLQ 批量 retry / 批量 ignore，以及按节点释放 running/retrying chunk
+- [x] 扫描端执行 chunk 前读取 Mongo chunk 状态，遇到 cancelled/ignored 直接 ACK 跳过，避免已排队消息继续执行
+- [x] UI 在 StreamChunkProgress 中展示调度状态，并提供暂停/恢复/取消未执行、DLQ 批量操作和节点释放入口
+- [x] 完成后端、扫描端、UI 定向测试、UI 生产构建和 diff 空白检查
+- [ ] 发布包含 P2 的 server 和 scan GHCR 镜像
 - **状态：** in_progress
 
 ## 关键问题
@@ -115,6 +125,10 @@
 | Stream 后续按默认模式演进，不再优先做 UI 开关 | 用户确认后期肯定都是 Stream 模式，P0 重点回到上线状态确认脚本 |
 | P1 优先做健康看板，再做控制和容量治理 | 先解决“任务为什么跑很久”的可观测问题，再给操作入口，降低误操作风险 |
 | P1 健康看板后端统计使用窗口化查询 | 大任务下如果全量读取 chunk，看板本身会拖慢服务端；运行中分片、最近完成量和最后完成时间应分别按状态/时间窗口查询 |
+| P2 暂停/取消采用阶段控制状态而不是删除 Redis Stream 消息 | Redis Stream 中已投递消息无法可靠按业务条件删除，服务端调度和扫描端执行前校验结合更可靠 |
+| P2 cancel 只取消未执行 chunk，不强杀 running chunk | 避免误杀正在执行的扫描进程；running chunk 可通过节点释放或租约过期机制回收 |
+| P2 cancel 必须阻断下游 continuation | 否则取消后的 terminal chunk 可能让严格阶段继续向下游推进，和“取消任务”语义冲突 |
+| P2 需要同步发布 server 和 scan 镜像 | server 包含控制 API/UI；scan 包含取消后跳过已取消息的执行前保护 |
 
 ## 遇到的错误
 | 错误 | 尝试次数 | 解决方案 |

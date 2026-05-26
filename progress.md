@@ -355,3 +355,45 @@
 ## 待确认
 - P1 源码已合入 `/Users/york/ai-proctet/info-scan/ScopeSentry` 和 `/Users/york/ai-proctet/info-scan/ScopeSentry-UI` 主目录，并已发布到 `ghcr.io/york-cmd/scopesentry-server:latest`。
 - 服务端/UI 子仓库本地 main 相对 `Autumn-27` upstream 有历史分叉，本轮未直接推送到上游官方仓库。
+
+### 阶段 11：P2 Stream 任务控制能力
+- **状态：** in_progress
+- **开始时间：** 2026-05-26
+- 执行的操作：
+  - 在服务端 worktree `/Users/york/.config/superpowers/worktrees/info-scan/stream-task-controls/ScopeSentry`、扫描端 worktree `/Users/york/.config/superpowers/worktrees/info-scan/stream-task-controls/ScopeSentry-Scan`、UI worktree `/Users/york/.config/superpowers/worktrees/info-scan/stream-task-controls/ScopeSentry-UI` 中实现 P2。
+  - 服务端新增 `stream_task_controls` 控制模型、Mongo repository、唯一索引和 summary `controlState` 字段。
+  - 服务端新增 `pause`、`resume`、`cancel`、`dlq/retry/all`、`dlq/ignore/all`、`release-node` API 和路由。
+  - `Dispatcher` 在规划 PortScan/SubdomainScan chunk 前读取控制状态；`ContinuationController` 在进入下游阶段前读取控制状态，paused/cancelled 阻断继续推进。
+  - `cancel` 将 pending/queued/retrying chunk 标记为 cancelled，并写入阶段 cancelled 控制状态；running chunk 不强杀。
+  - `release-node` 将指定节点持有的 running/retrying chunk 清理 node/streamId/leaseExpiresAt，attempt +1 后重新投递。
+  - 扫描端 `Handler` 执行前读取 chunk status；cancelled/ignored 直接返回成功，让 Redis consumer ACK 并跳过插件执行。
+  - UI `StreamChunkProgress` 顶部新增调度状态、暂停/恢复、取消未执行、DLQ 批量 retry/ignore；节点活跃表新增释放节点入口。
+  - 将 P2 改动从隔离 worktree 合入当前项目主目录，未触碰服务端主目录中已有的静态资源生成改动。
+- 创建/修改的文件：
+  - `ScopeSentry/internal/models/stream_task.go`
+  - `ScopeSentry/internal/repositories/streamtask/control_repository.go`
+  - `ScopeSentry/internal/repositories/streamtask/repository.go`
+  - `ScopeSentry/internal/services/streamdispatch/dispatcher.go`
+  - `ScopeSentry/internal/services/streamdispatch/continuation.go`
+  - `ScopeSentry/internal/api/handlers/streamtask/admin.go`
+  - `ScopeSentry/internal/api/routes/task/task.go`
+  - `ScopeSentry/internal/database/mongodb/initdb.go`
+  - `ScopeSentry-Scan/internal/streamtask/handler.go`
+  - `ScopeSentry-Scan/internal/streamtask/state.go`
+  - `ScopeSentry-UI/src/api/task/index.ts`
+  - `ScopeSentry-UI/src/api/task/types.ts`
+  - `ScopeSentry-UI/src/locales/en.ts`
+  - `ScopeSentry-UI/src/locales/zh-CN.ts`
+  - `ScopeSentry-UI/src/views/Task/components/StreamChunkProgress.vue`
+  - 对应测试文件
+
+## 测试结果补充（Stream 运维化 P2）
+| 测试 | 输入 | 预期结果 | 实际结果 | 状态 |
+|------|------|---------|---------|------|
+| 后端 P2 RED | `go test ./internal/api/handlers/streamtask ./internal/services/streamdispatch ./internal/api/routes/task ./internal/database/mongodb -run 'Pause|Resume|Batch|Cancel|Release|Control|DispatcherSkips|RegisterTaskRoutesIncludes|ExistingDatabaseIndexSpecs' -count=1` | 新增测试先失败 | 失败于缺少控制模型/API/路由/dispatcher 方法 | pass |
+| 扫描端 P2 RED | `go test ./internal/streamtask -run 'Cancelled|HandlerSkips' -count=1` | 新增测试先失败 | 失败于缺少 `chunkStatusCancelled` 和状态校验 | pass |
+| 后端 P2 定向 | `go test ./internal/api/handlers/streamtask ./internal/services/streamdispatch ./internal/repositories/streamtask ./internal/services/task/task ./internal/api/routes/task ./internal/database/mongodb ./internal/models -run 'Stream|Summary|DLQ|Retry|Ignore|Pause|Resume|Batch|Cancel|Release|Dispatcher|Continuation|Reaper|Repository|Control|Register' -count=1` | 服务端控制、DLQ、调度、continuation、索引测试通过 | 命令退出码 0 | pass |
+| 扫描端 P2 定向 | `go test ./internal/streamtask -run 'Stream|Handler|Consumer|Lease|TaskOptions|Cancelled' -count=1` | stream consumer/handler 和取消跳过测试通过 | 命令退出码 0 | pass |
+| UI 定向 ESLint | `pnpm exec eslint --ext .js,.ts,.vue ./src/views/Task/components/StreamChunkProgress.vue ./src/api/task/index.ts ./src/api/task/types.ts ./src/locales/zh-CN.ts ./src/locales/en.ts` | P2 UI 文件 lint 通过 | 命令退出码 0 | pass |
+| UI 生产构建 | `pnpm run build:pro` | 可生成生产构建 | 输出 `Build successful. Please see dist-pro directory`，命令退出码 0 | pass |
+| P2 diff 空白检查 | `git diff --check -- <P2 文件清单>` | P2 文件无尾随空白或补丁空白问题 | 服务端、扫描端、UI 命令退出码 0 | pass |

@@ -46,6 +46,10 @@
 - Redis Streams 和 Mongo chunk/DLQ 的上线确认可先通过脚本检查可访问性和概要计数，详细速度、卡顿、节点归属应放到 P1 健康看板。
 - P1 健康看板需要避免对大任务全量拉取 chunk。已采用 running/retrying 明细、最近 5 分钟 finished chunk、最后 1 条 finished chunk 分开查询的方式，降低任务跑很久或 chunk 很多时的接口压力。
 - P1 中 `failed` 当前等价于 `dlq`，因为 stream chunk 终态失败目前以 DLQ 表示；后续如果新增非 DLQ 的 failed 状态，需要单独计数。
+- P2 任务控制需要同时覆盖服务端和扫描端：服务端设置 pause/cancel 只能阻断后续调度，Redis Stream 中已经排队或被节点读取的消息仍可能到达扫描端。
+- 因此扫描端必须在执行 chunk 前读取 `stream_task_chunks.status`；如果状态为 `cancelled` 或 `ignored`，直接返回成功让 consumer ACK，不再标记 running，也不执行插件。
+- `cancel` 不能只把 pending/queued/retrying chunk 标成 `cancelled`，还必须让 continuation controller 读取 `stream_task_controls`，否则所有 chunk 终态后仍可能进入下游阶段。
+- `release-node` 的可靠语义是手动释放指定节点当前持有的 running/retrying chunk：清理 node/streamId/leaseExpiresAt，attempt +1，状态改为 retrying，并重新投递到对应模块 Stream。
 
 ## 技术决策
 | 决策 | 理由 |
@@ -70,6 +74,10 @@
 | Stream 运维化按 P0-P4 分阶段推进 | 先脚本确认上线状态，再做健康看板、任务控制、节点容量治理，最后才扩展 DirScan/URLScan/WebCrawler/VulnerabilityScan |
 | P1 先只展示可观测信息，不做暂停/恢复/释放/批量 retry 等操作 | 这些属于 P2 控制能力；先把状态判断做准，避免 UI 上线后误操作影响任务 |
 | 运行中分片明细只展示 running/retrying | 这是用户排查“卡在哪个节点/插件/目标”的核心信息，比展示所有历史 chunk 更高信号且成本更低 |
+| P2 阶段控制状态持久化到 `stream_task_controls` | 比仅依赖 Redis key 更适合 UI 展示、服务重启恢复和 Mongo 查询 |
+| P2 暂停只阻断新调度，不尝试撤回已进入 Redis Stream 的消息 | Redis Stream 消息一旦投递，撤回成本高且容易破坏 consumer group 语义 |
+| P2 取消不强杀 running chunk | 扫描工具执行中断的副作用不可控，先通过节点释放、租约过期、DLQ 机制处理 |
+| P2 UI 控制入口放在 StreamChunkProgress | 用户排查 pending/running/DLQ 时可以直接操作，不需要跳转到独立运维页 |
 
 ## 遇到的问题
 | 问题 | 解决方案 |
@@ -81,6 +89,7 @@
 | `ksubdomain` 在本地节点初始化检查阶段超时 | 当前不影响节点注册和最小任务链路，作为后续插件专项调试项保留 |
 | Subdomain chunk timeout 最初未传递到插件参数 | 在 `ScopeSentry-Scan/internal/streamtask/handler.go` 增加 `applySubdomainChunkTimeout`，并用测试覆盖 subfinder、puredns、显式 timeout 和 `--timeout=30` 语法 |
 | `rg 8082|4001` 会命中大量无关内容 | 区分当前运行配置与历史/测试数据/端口字典；当前配置文件和脚本默认值已核对为 `8080/4000` |
+| P2 初版 cancel 未阻断 continuation | 补充 `ContinuationController` control store 和回归测试，阶段 paused/cancelled 时不再 ready |
 
 ## 资源
 - `ScopeSentry/README_CN.md`
