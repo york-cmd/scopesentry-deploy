@@ -325,6 +325,8 @@
   - 补齐中英文 i18n 和 TypeScript 类型。
   - 2026-05-26：将 P1 服务端和 UI 源码改动从隔离 worktree 合入当前主目录；没有触碰服务端主目录中已有的 `cmd/main/static` 生成资源改动。
   - 2026-05-26：在当前主目录重新运行后端定向测试、UI ESLint、UI 生产构建和 diff 空白检查。
+  - 2026-05-26：通过 `./devctl server publish --tag v2026.05.26-stream-health-dashboard` 打包 UI、同步服务端 embed static、交叉编译服务端、构建并推送 GHCR 服务端镜像。
+  - 2026-05-26：已推送 `ghcr.io/york-cmd/scopesentry-server:v2026.05.26-stream-health-dashboard` 和 `ghcr.io/york-cmd/scopesentry-server:latest`，digest 为 `sha256:f832baa2eff8a6a61b0f74c34cb13a1fc89ea2a75743191e3b41e5a054e86065`。
 - 创建/修改的文件：
   - `ScopeSentry/internal/api/handlers/streamtask/admin.go`
   - `ScopeSentry/internal/api/handlers/streamtask/admin_test.go`
@@ -347,7 +349,9 @@
 | 当前主目录 UI 定向 ESLint | `pnpm exec eslint --ext .js,.ts,.vue ./src/views/Task/components/StreamChunkProgress.vue ./src/api/task/types.ts ./src/locales/zh-CN.ts ./src/locales/en.ts` | 合入后仍通过 | 命令退出码 0 | pass |
 | 当前主目录 UI 生产构建 | `pnpm run build:pro` | 合入后能构建生产包 | 输出 `Build successful. Please see dist-pro directory`，命令退出码 0 | pass |
 | 当前主目录 diff 空白检查 | `git diff --check -- <P1 服务端/UI 文件>` | P1 文件无空白问题 | 命令退出码 0 | pass |
+| 服务端镜像发布 | `./devctl server publish --tag v2026.05.26-stream-health-dashboard` | 构建并推送 GHCR 服务端镜像 | tag 和 latest 均推送成功，digest 为 `sha256:f832baa2eff8a6a61b0f74c34cb13a1fc89ea2a75743191e3b41e5a054e86065` | pass |
+| 镜像 UI 标识验证 | `docker run --rm --entrypoint sh ghcr.io/york-cmd/scopesentry-server:v2026.05.26-stream-health-dashboard -lc 'grep ... /opt/ScopeSentry/ScopeSentry'` | 镜像二进制包含 P1 看板标识 | 命中 `Node Activity`、`节点活跃`、`finishedLastFiveMinutes`、`leaseExpired`、`streamChunkNodeActivity` | pass |
 
 ## 待确认
-- P1 源码已合入 `/Users/york/ai-proctet/info-scan/ScopeSentry` 和 `/Users/york/ai-proctet/info-scan/ScopeSentry-UI` 主目录，但尚未推送到上游 `Autumn-27` 远程。
-- 服务端主目录原本已有大量 `cmd/main/static` 生成资源变更，本轮未清理也未覆盖；如果要让服务端内嵌前端立刻带上 P1 UI，需要另做一次受控静态资源同步。
+- P1 源码已合入 `/Users/york/ai-proctet/info-scan/ScopeSentry` 和 `/Users/york/ai-proctet/info-scan/ScopeSentry-UI` 主目录，并已发布到 `ghcr.io/york-cmd/scopesentry-server:latest`。
+- 服务端/UI 子仓库本地 main 相对 `Autumn-27` upstream 有历史分叉，本轮未直接推送到上游官方仓库。

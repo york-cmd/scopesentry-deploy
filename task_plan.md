@@ -78,7 +78,8 @@
 - [x] UI 在 `StreamChunkProgress` 中展示健康指标、运行中分片表、节点活跃表和原 DLQ 表
 - [x] 覆盖后端定向 Go 测试、UI ESLint、UI 生产构建和 diff 空白检查
 - [x] 将两个 feature worktree 的 P1 源码改动合入当前主目录
-- [ ] 决定是否推送服务端/UI 子仓库分支或继续保留本地提交
+- [x] 发布包含 P1 健康看板 UI 的服务端 GHCR 镜像
+- [ ] 继续 P2 任务控制能力开发
 - **状态：** in_progress
 
 ## 关键问题
