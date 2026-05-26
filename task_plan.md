@@ -89,8 +89,8 @@
 - [x] 扫描端执行 chunk 前读取 Mongo chunk 状态，遇到 cancelled/ignored 直接 ACK 跳过，避免已排队消息继续执行
 - [x] UI 在 StreamChunkProgress 中展示调度状态，并提供暂停/恢复/取消未执行、DLQ 批量操作和节点释放入口
 - [x] 完成后端、扫描端、UI 定向测试、UI 生产构建和 diff 空白检查
-- [ ] 发布包含 P2 的 server 和 scan GHCR 镜像
-- **状态：** in_progress
+- [x] 发布包含 P2 的 server 和 scan GHCR 镜像
+- **状态：** complete
 
 ## 关键问题
 1. 本地开发方案是否需要只给文档，还是要顺手落成启动脚本/README。

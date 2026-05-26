@@ -369,6 +369,10 @@
   - 扫描端 `Handler` 执行前读取 chunk status；cancelled/ignored 直接返回成功，让 Redis consumer ACK 并跳过插件执行。
   - UI `StreamChunkProgress` 顶部新增调度状态、暂停/恢复、取消未执行、DLQ 批量 retry/ignore；节点活跃表新增释放节点入口。
   - 将 P2 改动从隔离 worktree 合入当前项目主目录，未触碰服务端主目录中已有的静态资源生成改动。
+  - 2026-05-26：提交 P2 源码改动到三个子仓本地 main：服务端 `77bd322 feat: add stream task controls`，扫描端 `d12cb638 feat: skip cancelled stream chunks`，UI `a7cae31 feat: add stream task control actions`。
+  - 2026-05-26：发布 server 镜像 `ghcr.io/york-cmd/scopesentry-server:v2026.05.26-stream-task-controls` 和 `latest`，digest 为 `sha256:7d8723f81f5fc74969b1242b84aff2194237bf87806b74a339a82eb04447b964`。
+  - 2026-05-26：发布 scan 镜像 `ghcr.io/york-cmd/scopesentry-scan:v2026.05.26-stream-task-controls` 和 `latest`，digest 为 `sha256:50ef42d3309a96ea8a428c008527cfe859342d4910ecfb57456f147888ced828`。
+  - 2026-05-26：验证 server 镜像包含 `controlState`、`release-node`、`streamChunkCancel`、`streamChunkReleaseNode`、`stream_task_controls`；scan 镜像包含 `cancelled`、`ignored`、`stream_task_chunks`。
 - 创建/修改的文件：
   - `ScopeSentry/internal/models/stream_task.go`
   - `ScopeSentry/internal/repositories/streamtask/control_repository.go`
@@ -397,3 +401,7 @@
 | UI 定向 ESLint | `pnpm exec eslint --ext .js,.ts,.vue ./src/views/Task/components/StreamChunkProgress.vue ./src/api/task/index.ts ./src/api/task/types.ts ./src/locales/zh-CN.ts ./src/locales/en.ts` | P2 UI 文件 lint 通过 | 命令退出码 0 | pass |
 | UI 生产构建 | `pnpm run build:pro` | 可生成生产构建 | 输出 `Build successful. Please see dist-pro directory`，命令退出码 0 | pass |
 | P2 diff 空白检查 | `git diff --check -- <P2 文件清单>` | P2 文件无尾随空白或补丁空白问题 | 服务端、扫描端、UI 命令退出码 0 | pass |
+| Server 镜像发布 | `./devctl server publish --tag v2026.05.26-stream-task-controls` | 构建并推送 P2 server 镜像 | tag 和 latest 均推送成功，digest 为 `sha256:7d8723f81f5fc74969b1242b84aff2194237bf87806b74a339a82eb04447b964` | pass |
+| Scan 镜像发布 | `./devctl scan publish --tag v2026.05.26-stream-task-controls` | 构建并推送 P2 scan 镜像 | tag 和 latest 均推送成功，digest 为 `sha256:50ef42d3309a96ea8a428c008527cfe859342d4910ecfb57456f147888ced828` | pass |
+| Server 镜像内容验证 | `docker run --rm --entrypoint sh ghcr.io/york-cmd/scopesentry-server:v2026.05.26-stream-task-controls -lc 'grep ... /opt/ScopeSentry/ScopeSentry'` | 镜像包含 P2 UI/API 标识 | 命中 `controlState`、`release-node`、`streamChunkCancel`、`streamChunkReleaseNode`、`stream_task_controls` | pass |
+| Scan 镜像内容验证 | `docker run --rm --entrypoint sh ghcr.io/york-cmd/scopesentry-scan:v2026.05.26-stream-task-controls -lc 'grep ... /apps/ScopeSentry-Scan'` | 镜像包含取消跳过状态标识 | 命中 `cancelled`、`ignored`、`stream_task_chunks` | pass |
